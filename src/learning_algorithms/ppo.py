@@ -4,7 +4,7 @@ from jaxtyping import jaxtyped
 
 from envs.simulators.interfaces.simulator import Simulator
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
-from src.learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
+from learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
 
 
 class PPO(LearningAlgorithm):

@@ -10,10 +10,10 @@ from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import jaxtyped, Float, Bool
 from torchvision.transforms.functional import to_tensor
 
-import src.sets as sets
+import sets as sets
 from envs.simulators.quadrotor import QuadrotorEnv
 from envs.interfaces.safe_state_env import SafeStateEnv
-from src.learning_algorithms.components.coupled_tensor import CoupledTensor
+from learning_algorithms.components.coupled_tensor import CoupledTensor
 
 
 class NavigateQuadrotorEnv(QuadrotorEnv, SafeStateEnv):

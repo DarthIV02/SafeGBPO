@@ -9,7 +9,7 @@ from beartype import beartype
 from jaxtyping import  Float, jaxtyped
 from gymnasium.vector import VectorActionWrapper
 
-import src.sets as sets
+import sets as sets
 from envs.simulators.interfaces.simulator import Simulator
 from envs.interfaces.safe_state_env import SafeStateEnv
 from envs.interfaces.safe_action_env import SafeActionEnv
