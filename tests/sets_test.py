@@ -29,6 +29,7 @@ def basic_test(cvx_set: sets.ConvexSet):
                s=5, color="red")
 
     plt.show()
+    plt.close(fig)
 
     contained = torch.tensor(
         [cvx_set.contains(sample.unsqueeze(0)) for sample in contained_samples])
@@ -52,9 +53,10 @@ def containment_test(cvx_set: sets.Ball | sets.Box | sets.Capsule | sets.Zonotop
             assert not cvx_set.contains(sample).all()
     except AssertionError:
         plt.show()
+        plt.close(fig)
         assert False
     plt.show()
-
+    plt.close(fig)
 
 def intersection_test(cvx_set: sets.Ball | sets.Box | sets.Capsule | sets.Zonotope,
                       non_intersecting_samples: list[sets.ConvexSet],
@@ -72,9 +74,10 @@ def intersection_test(cvx_set: sets.Ball | sets.Box | sets.Capsule | sets.Zonoto
             assert cvx_set.intersects(sample).all()
     except AssertionError:
         plt.show()
+        plt.close(fig)
         assert False
     plt.show()
-
+    plt.close(fig)
 
 def test_basic_ball():
     ball = sets.Ball(torch.tensor([[1.0, 2.0]]), torch.tensor([3.0]))

@@ -1,0 +1,36 @@
+{
+  "name": "SafeGBPO (uv + Python 3.12)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "runArgs": ["--gpus=all"],
+
+  "settings": {
+    "python.defaultInterpreterPath": ".venv/bin/python",
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-azuretools.vscode-docker",
+        "charliermarsh.ruff"
+      ]
+    }
+  },
+
+  "containerEnv": {
+    "PYTHONPATH": "/workspaces/SafeGBPO/src"
+  },
+
+  "remoteEnv": {
+    "WANDB_API_KEY": "${localEnv:WANDB_API_KEY}"
+  },
+
+  "postCreateCommand": "uv venv -p /usr/local/bin/python3.12 && uv pip sync pyproject.toml",
+  "postStartCommand": "echo '✔ Environment ready' && .venv/bin/python -V",
+  "remoteUser": "vscode"
+}
