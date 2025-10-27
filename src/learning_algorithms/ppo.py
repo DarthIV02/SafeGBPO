@@ -130,7 +130,7 @@ class PPO(LearningAlgorithm):
         Returns:
             The policy loss.
         """
-        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)
+        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)  
         entropy = self.policy.entropy()
 
         log_prob_diff = torch.clamp(curr_log_prob - batch.log_probs, min=-20, max=20)

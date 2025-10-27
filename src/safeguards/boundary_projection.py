@@ -30,6 +30,9 @@ class BoundaryProjectionSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
+        ## Yasin note: example of the BP CVXPY optimisation to get the nearest action of the safe set 
+        ## min || a_s -a || is computed as a convex optimitation step to compute the nearest possible action
+     
         if self.boundary_layer is None:
             cp_action = cp.Parameter(self.action_dim)
             parameters = [cp_action]
@@ -37,6 +40,11 @@ class BoundaryProjectionSafeguard(Safeguard):
             cp_safe_action = cp.Variable(self.action_dim)
 
             objective = cp.Minimize(cp.sum_squares(cp_action - cp_safe_action))
+
+            ## Yasin note:  
+            ## with the feasibility_constraints the model basically constructs the constraint from the zonotope in the env to be used cvxpy
+            ## the constraints is  just c +G ß | ||ß||<=1
+
 
             constraints = self.feasibility_constraints(cp_safe_action)
             if self.action_constrained:

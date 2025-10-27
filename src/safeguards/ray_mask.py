@@ -71,6 +71,12 @@ class RayMaskSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
+
+        ## Yasin note:  
+        ## cvxpy optimisation happens here either through the compute_distances or before with approximation through the zonotopic expansion + compute_distances
+        ## the optimisation then gives use both feasible and safe distances that stull have to be added to get the safe action 
+        ## the constraints are from the zonotopes constructs is  just c +G ß | ||ß||<=1 to be then used for cvxpy
+        
         if self.state_constrained:
             safe_center, safe_dist, feasible_dist = self.distance_approximations(action)
         else:

@@ -7,7 +7,7 @@ import numpy as np
 from torch import Tensor
 from beartype import beartype
 from jaxtyping import  Float, jaxtyped
-from gymnasium.vector import VectorActionWrapper
+from gymnasium.vector import VectorActionWrapper  # used to parallize the enviroments 
 
 import src.sets as sets
 from envs.simulators.interfaces.simulator import Simulator
@@ -32,6 +32,7 @@ class Safeguard(VectorActionWrapper, ABC):
         Args:
             env: A custom secured, pytorch-based environment.
         """
+        ## Yasin note: here the encapsulation happens such that it has the same  variables 
         super().__init__(env)
         self.batch_dim = self.env.num_envs
         self.state_dim = self.env.state_dim
@@ -64,6 +65,7 @@ class Safeguard(VectorActionWrapper, ABC):
         # This is an overapproximation so it may not intersect
         projectable = self.env.state_set.intersects(reachable_set)
 
+        ## Yasin note: this is where the model uses its safeguard optimisation like BP or Rays
         safe_action = torch.where(projectable.unsqueeze(1), action, self.safeguard(action))
         if safe_action.isnan().any() or safe_action.isinf().any():
             raise ValueError(f"""
