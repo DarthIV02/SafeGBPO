@@ -71,6 +71,7 @@ class RayMaskSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
+        ### Yasin Tag: 
 
         ## Yasin note:  
         ## cvxpy optimisation happens here either through the compute_distances or before with approximation through the zonotopic expansion + compute_distances

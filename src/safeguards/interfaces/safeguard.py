@@ -32,7 +32,7 @@ class Safeguard(VectorActionWrapper, ABC):
         Args:
             env: A custom secured, pytorch-based environment.
         """
-        ## Yasin note: here the encapsulation happens such that it has the same  variables 
+        ## Yasin note: here the wrapper encapsulation happens such that it has the same  variables and parallized functions 
         super().__init__(env)
         self.batch_dim = self.env.num_envs
         self.state_dim = self.env.state_dim
@@ -62,7 +62,16 @@ class Safeguard(VectorActionWrapper, ABC):
     def actions(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
             -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
         reachable_set = self.env.reachable_set()
+
+        ### Yasin Tag: 
+
+        ## Yasin note: this function come frome the VectorActionWrapper abstract class and is used to transform the policy before inputing it into the env
+        # the simulator env is defined as an Vector env where you have to connect it with execute_action which is the connection here i think
+        # the execute_action is then used in the simulator step to then output the reward,
+        # Batch of (observations, rewards, terminations, truncations, infos)
+        
         # This is an overapproximation so it may not intersect
+
         projectable = self.env.state_set.intersects(reachable_set)
 
         ## Yasin note: this is where the model uses its safeguard optimisation like BP or Rays
