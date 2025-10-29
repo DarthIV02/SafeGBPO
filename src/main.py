@@ -39,8 +39,8 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     ## Yasin note: 
     ##  the real example enviroments consist of the 2 important interfaces, 
     ##  the first is the simulator where one is asked to define the reset, observation, reward, dynamics of the system, episode_ending (if the episode ended ) and how the simulation is rendered
-    ##  an implemented simulator such as Quadrotor should be 
-    ##  the second is defining what kind of Safety we enforce. Either Safe Action set, safe states or both via RCI (Robust Control Invariance) defined on a Zonotope which should be often just axis aligned boxes 
+    ##  an implemented simulator defines first the feasible observation, noise and  state as axis aligned boxes.  
+    ##  the second is defining what kind of Safety we enforce. Either Safe Action set, safe states or both via RCI (Robust Control Invariance) defined on a Zonotope 
 
 
     env_class = import_module(modules, cfg.env.name + "Env")
@@ -58,7 +58,7 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     logger = Logger(agent, env, eval_env, run, trial, cfg.eval_freq, cfg.fast_eval)
 
     ## Yasin note: 
-    ## all the things before just loaded the config information given with cfg with is the Experiment. Only this line is important
+    ## all the things before just loaded the config information given with cfg with is the Experiment. Only this actually trains this stuff now
     ## The agent is the main program where the env, saveguard and can be found in learning_algorithms/interfaces/learning_algorithms.
 
     agent.learn(interactions=cfg.interactions, logger=logger)
