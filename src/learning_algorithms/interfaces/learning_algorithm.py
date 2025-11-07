@@ -6,7 +6,7 @@ from beartype import beartype
 from jaxtyping import jaxtyped
 
 from learning_algorithms.components.value_function import ValueFunction
-from src.learning_algorithms.components.policy import Policy
+from learning_algorithms.components.policy import Policy
 from envs.simulators.interfaces.simulator import Simulator
 
 from typing import TYPE_CHECKING
@@ -64,6 +64,11 @@ class LearningAlgorithm(ABC):
             interactions: The number of environment interactions to use for learning.
             logger: The logger to use for logging learning progress.
         """
+
+        ## Yasin note: 
+        ## this is the main function where the training happens for the policy. 
+        ## only self._learn_episode is important here and its defined  by the respective learning_algortithm like ppo
+
         num_learn_episodes = interactions // self.interactions_per_episode
 
         policy_lr_update = 0

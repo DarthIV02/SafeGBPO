@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Arc
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Capsule(ConvexSet):
@@ -97,7 +97,7 @@ class Capsule(ConvexSet):
         Returns:
             A tensor of sampled points from the capsule.
         """
-        from src.sets.ball import Ball
+        from sets.ball import Ball
 
         t = torch.rand(self.start.shape[0], 1)
         line_samples = t * self.start + (1 - t) * self.end
@@ -115,7 +115,7 @@ class Capsule(ConvexSet):
         Returns:
             True if the point is contained in the capsule, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             closest_point = self.closest_point_on_line_segment(other)
@@ -149,7 +149,7 @@ class Capsule(ConvexSet):
         Returns:
             True if other intersects with the capsule, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)

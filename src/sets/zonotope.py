@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Zonotope(ConvexSet):
@@ -128,6 +128,14 @@ class Zonotope(ConvexSet):
         Returns:
             The constraints for the zonotope-zonotope containment problem.
         """
+
+        ## Paper note: Determining the containment of a zonotope in another
+        ## zonotope is co-NP complete [63], but a sufficient condition for Z1 ⊆ Z2 is [64, Eq. 15]
+        ## 1 ≥ min γ∈Rn2 ,Γ∈Rn2×n1  ||Γ γ||∞ (8a) 
+        ## subject to G1 = G2Γ (8b) 
+        ## c2 − c1 = G2γ . (8c)
+        ## Both containment problems are linear.
+
         weights = cp.Variable(g2.shape[1])
         mapping = cp.Variable((g2.shape[1], g1.shape[1]))
 
@@ -152,7 +160,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if the point is contained in the zonotope, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             weights = cp.Variable((self.batch_dim, self.num_gens))
@@ -249,7 +257,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if other intersects with the zonotope, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)
@@ -272,7 +280,7 @@ class Zonotope(ConvexSet):
         Returns:
             The smallest axis-aligned box enclosure of the zonotope.
         """
-        from src.sets import Box
+        from sets import Box
         return Box(self.center, self.generator.abs().sum(dim=2).diag_embed())
 
     def vertices(self) -> Float[Tensor, "{self.batch_dim} {self.dim} num_vert"]:

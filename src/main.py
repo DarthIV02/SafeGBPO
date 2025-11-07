@@ -4,7 +4,7 @@ from typing import Optional
 
 import torch
 import wandb
-import optuna
+import optuna # used to train the hyperparameters
 
 from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
@@ -36,18 +36,31 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     modules |= gather_custom_modules(Path(__file__).parent / "safeguards", "Safeguard")
     modules |= gather_custom_modules(Path(__file__).parent / "learning_algorithms", "LearningAlgorithm")
 
+    ## Yasin note: 
+    ##  the real example enviroments consist of the 2 important interfaces, 
+    ##  the first is the simulator where one is asked to define the reset, observation, reward, dynamics of the system, episode_ending (if the episode ended ) and how the simulation is rendered
+    ##  an implemented simulator defines first the feasible observation, noise and  state as axis aligned boxes.  
+    ##  the second is defining what kind of Safety we enforce. Either Safe Action set, safe states or both via RCI (Robust Control Invariance) defined on a Zonotope 
+
+
     env_class = import_module(modules, cfg.env.name + "Env")
     env = env_class(**asdict(cfg.env))
     cfg.env.num_envs = env.EVAL_ENVS
     eval_env = env_class(**asdict(cfg.env))
 
     if cfg.safeguard:
+        ## Yasin note: here the enviroment is packaged into the Safeguard such that it is encapsulated and has the same properties as env.
         safeguard_class = import_module(modules, cfg.safeguard.name + "Safeguard")
         env = safeguard_class(env, **asdict(cfg.safeguard))
         eval_env = safeguard_class(eval_env, **asdict(cfg.safeguard))
 
     agent = import_module(modules, cfg.learning_algorithm.name)(**vars(cfg.learning_algorithm), env=env)
     logger = Logger(agent, env, eval_env, run, trial, cfg.eval_freq, cfg.fast_eval)
+
+    ## Yasin note: 
+    ## all the things before just loaded the config information given with cfg with is the Experiment. Only this actually trains this stuff now
+    ## The agent is the main program where the env, saveguard and can be found in learning_algorithms/interfaces/learning_algorithms.
+
     agent.learn(interactions=cfg.interactions, logger=logger)
 
     run.finish()
@@ -62,6 +75,9 @@ if __name__ == "__main__":
 
     wandb.login(key="")
 
+    ## Yasin note: 
+    ## we can define multiple Experiment runs in the queue. the Experiment is basically just all the configs that are then loaded in run_experiment()
+    ## an Experiment defines mainly the learning algorithm, safeguard and important for us the enviroment  
     experiment_queue = [
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
@@ -75,7 +91,9 @@ if __name__ == "__main__":
     for i, experiment in enumerate(experiment_queue):
         if experiment.num_runs == 0:
             print("[STATUS] Running hyperparameter search")
-
+            ## Yasin note: 
+            ##  optuna is used to train the hyperparameters defined in the learning algorithm config
+            ## this is not that important for us since we have the hyperparameters already but study.optimize() basically just does the run_experiment()
             study = optuna.create_study(direction="maximize",
                                         sampler=optuna.samplers.TPESampler(),
                                         pruner=optuna.pruners.HyperbandPruner(),
