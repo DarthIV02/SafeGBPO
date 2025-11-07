@@ -140,6 +140,16 @@ class SHAC(LearningAlgorithm):
         normalisation = self.env.num_envs * self.len_trajectories + self.buffer.terminals.count_nonzero()
 
         policy_loss = -(discount * values).sum() / normalisation
+
+        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
+
+        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
+        
+        ## Paper note: 
+        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
+        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
+        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
+        
         if self.buffer.store_safe_actions:
             policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
                 self.buffer.safe_actions.tensor, self.buffer.actions.tensor)

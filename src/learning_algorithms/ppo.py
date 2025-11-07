@@ -130,7 +130,7 @@ class PPO(LearningAlgorithm):
         Returns:
             The policy loss.
         """
-        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)
+        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)  
         entropy = self.policy.entropy()
 
         log_prob_diff = torch.clamp(curr_log_prob - batch.log_probs, min=-20, max=20)
@@ -145,6 +145,17 @@ class PPO(LearningAlgorithm):
                                                  1 - self.clip_coef,
                                                  1 + self.clip_coef)
         policy_loss = torch.max(loss, loss_clamped).mean() - self.ent_coef * entropy.mean()
+
+        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
+
+        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
+        
+        ## Paper note: 
+        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
+        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
+        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
+
+
         if self.buffer.store_safe_actions:
             policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
                 self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
