@@ -6,7 +6,7 @@ from beartype import beartype
 from jaxtyping import jaxtyped
 
 from learning_algorithms.components.value_function import ValueFunction
-from src.learning_algorithms.components.policy import Policy
+from learning_algorithms.components.policy import Policy
 from envs.simulators.interfaces.simulator import Simulator
 
 from typing import TYPE_CHECKING

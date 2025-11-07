@@ -3,7 +3,7 @@ from torch import Tensor
 from beartype import beartype
 from jaxtyping import jaxtyped, Float
 
-from src.sets.box import Box
+from sets.box import Box
 
 class AxisAlignedBox(Box):
     """

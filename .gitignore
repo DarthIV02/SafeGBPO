@@ -163,4 +163,5 @@ cython_debug/
 .idea/
 /rci/
 
+# MP4 videos
 *.mp4

@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Circle
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Ball(ConvexSet):
@@ -88,7 +88,7 @@ class Ball(ConvexSet):
         Returns:
             True if the point is contained in the ball, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             return torch.norm(other - self.center, dim=1) <= self.radius
@@ -120,7 +120,7 @@ class Ball(ConvexSet):
         Returns:
             True if other intersects with the ball, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             center_distance = torch.norm(other.center - self.center, dim=1)
