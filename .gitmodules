@@ -1,6 +1,7 @@
 [submodule "benchmark_repos/pinet"]
 	path = benchmark_repos/pinet
 	url = https://github.com/DarthIV02/pinet.git
+	branch = ivannia
 [submodule "benchmark_repos/FSNet"]
 	path = benchmark_repos/FSNet
 	url = https://github.com/SaidaLiu27/FSNet_test.git
