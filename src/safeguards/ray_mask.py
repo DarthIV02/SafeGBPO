@@ -34,6 +34,7 @@ class RayMaskSafeguard(Safeguard):
                  env: SafeEnv,
                  linear_projection: bool,
                  zonotopic_approximation: bool,
+                 polytopic_approximation: bool,
                  passthrough: bool,
                  **kwargs):
         """
@@ -51,6 +52,8 @@ class RayMaskSafeguard(Safeguard):
 
         if zonotopic_approximation:
             self.distance_approximations = self.zonotopic_approximation
+        elif polytopic_approximation:
+            self.distance_approximations = self.polytopic_approximation
         else:
             self.distance_approximations = self.orthogonal_approximation
 
@@ -139,6 +142,68 @@ class RayMaskSafeguard(Safeguard):
         return safe_center, safe_dist, feasible_dist
 
     @jaxtyped(typechecker=beartype)
+    def polytopic_approximation(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) -> tuple[
+        Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+        Float[Tensor, "{self.batch_dim} 1"],
+        Float[Tensor, "{self.batch_dim} 1"],
+    ]:
+        """
+        Approximate the safe action set by a polytope and compute the distances to the
+        safe center and feasible boundary (ray intersection with box constraints).
+
+        Args:
+            action: The action to safeguard.
+
+        Returns:
+            Safe centers, distances to the safe boundary, and distances to the feasible boundary.
+        """
+
+        tol = 1e-8
+
+        agent_position = self.env.state
+        obstacle_position = self.env.obstacle_centers[0] #? Check because you only have one???
+        obstacle_radius = self.env.obstacle_radii[0] #? Check because you only have one???
+
+        polytope = self.polytope_expansion(agent_position, obstacle_position, obstacle_radius)
+
+        center_np = polytope.center()
+        safe_center = torch.tensor(center_np, device=action.device, dtype=action.dtype)
+
+        action_np = action.detach().cpu().numpy().squeeze()
+        low = self.env.action_set.min[0, :].cpu().numpy()
+        high = self.env.action_set.max[0, :].cpu().numpy()
+
+        v = action_np - center_np
+
+        if np.linalg.norm(v) < tol:
+            # Degenerate ray → no movement
+            safe_dist = torch.tensor([[0.0]], device=action.device, dtype=action.dtype)
+            feasible_dist = torch.tensor([[0.0]], device=action.device, dtype=action.dtype)
+            return safe_center, safe_dist, feasible_dist
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inv_v = 1.0 / v
+            t_low = (low - center_np) * inv_v
+            t_high = (high - center_np) * inv_v
+
+        t_max_per_dim = np.maximum(t_low, t_high)
+        t_exit = np.nanmin(t_max_per_dim)
+        t_intersect = max(0.0, t_exit)
+
+        boundary_point_A = center_np + t_intersect * v
+        boundary_point_A = np.clip(boundary_point_A, low, high)
+        feasible_dist_val = float(t_intersect * np.linalg.norm(v))
+
+        boundary_point_Ar = polytope.boundary_point(v).squeeze()
+        safe_dist_val = float(np.linalg.norm(boundary_point_Ar - center_np))
+
+        safe_dist = torch.tensor([[safe_dist_val]], device=action.device, dtype=action.dtype)
+        feasible_dist = torch.tensor([[feasible_dist_val]], device=action.device, dtype=action.dtype)
+
+        return safe_center, safe_dist, feasible_dist
+
+
+    @jaxtyped(typechecker=beartype)
     def zonotope_expansion(self) -> tuple[
         Float[Tensor, "{self.batch_dim} {self.action_dim}"],
         Float[Tensor, "{self.batch_dim} {self.action_dim} {self.action_dim*2}"]
@@ -196,6 +261,53 @@ class RayMaskSafeguard(Safeguard):
         safe_generator = directions * lengths.unsqueeze(1)
 
         return safe_center, safe_generator
+
+    @jaxtyped(typechecker=beartype)
+    def polytope_expansion(self,
+        agent_position: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+        obstacle_position: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+        obstacle_radius: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+    ) -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
+
+        boundary_size = [self.state_set.min, self.state_set.max] # This might crash
+
+        b = []
+        A = []
+
+        dim = self.state_set.center.shape[1] # Dimension of environment
+
+        # TODO: this can be optimized using vectorization!
+        # boundary halfspace constraints
+        noise = self.noise_set.sample()
+        b += [boundary_size + agent_position[i] - noise for i in range(dim)]
+        b += [boundary_size - agent_position[i] - noise for i in range(dim)]
+        A += [[-1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+        A += [[1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+
+        # action space constraints
+        b += [self.asi] * (2 * dim)
+        A += [[-1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+        A += [[1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+
+        # obstacle constraints
+        threshold = np.sqrt(dim) * (self.asi + noise)
+        for i in range(len(obstacle_position)):
+            if (
+                np.linalg.norm(obstacle_position[i] - agent_position) - obstacle_radius[i]
+                > threshold
+            ):
+                continue
+
+            b_obs, A_obs = self._halfspace_constraint(
+                agent_position, obstacle_position[i], obstacle_radius[i]
+            )
+            b += [b_obs]
+            A += [A_obs]
+
+        self._current_safe_input_set = sets.HPolytope(b=np.array(b), A=np.array(A))
+
+        return self._current_safe_input_set
+
 
     @jaxtyped(typechecker=beartype)
     def compute_distances(self,
