@@ -150,3 +150,16 @@ class Ball(ConvexSet):
             support = (direction.unsqueeze(2) * other.generator).sum(dim=1).abs().sum(
                 dim=1)
             return self.intersects(other.box()) & (distance <= support + self.radius)
+        # CAUTION: NOT SURE HOW MATHEMATICALLY CORRECT THIS IS!!!!
+        elif isinstance(other, sets.HPolytope):
+            # Compute signed distances for each polytope in the batch
+            Ac = torch.einsum("bij, bj -> bi", other.A, self.center)  # (batch, num_constraints)
+            signed_dist = (Ac - other.b) / (torch.norm(other.A, dim=2) + 1e-8)
+
+            # If inside all constraints, intersection is true
+            inside_mask = torch.all(signed_dist <= 0, dim=1)
+
+            # Otherwise, check if the max violation is smaller than the radius
+            max_violation = torch.clamp(signed_dist, min=0).max(dim=1).values
+            return inside_mask | (max_violation <= self.radius)
+

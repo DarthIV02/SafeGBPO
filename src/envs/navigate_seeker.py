@@ -44,7 +44,8 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                  num_obstacles: int,
                  min_radius: float,
                  max_radius: float,
-                 draw_safe_action_set: bool
+                 draw_safe_action_set: bool,
+                 polytopic_apptoach: bool,
                  ):
         """
         Initialize the NavigateSeekerEnv.
@@ -71,6 +72,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self.min_radius = min_radius
         self.max_radius = max_radius
         self.draw_safe_action_set = draw_safe_action_set
+        self.polytope = polytopic_apptoach
 
         self.obstacles: list[sets.Ball] = [sets.Ball(torch.empty((num_envs, 2)), torch.empty(num_envs)) for _ in
                                            range(num_obstacles)]
@@ -82,9 +84,17 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self.reached = torch.zeros(self.num_envs, dtype=torch.bool)
 
         self.generator_layer = None
-        self.last_safe_action_set: sets.Zonotope = sets.Zonotope(torch.zeros(self.num_envs, self.state_dim),
-                                                                 torch.zeros(self.num_envs, self.state_dim,
-                                                                             self.num_action_gens))
+
+        if not self.polytope:
+            self.last_safe_action_set: sets.Zonotope = sets.Zonotope(torch.zeros(self.num_envs, self.state_dim),
+                                                                     torch.zeros(self.num_envs, self.state_dim,
+                                                                                 self.num_action_gens))
+            self.shape = sets.Zonotope
+        else:
+            self.last_safe_action_set: sets.HPolytope = sets.HPolytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
+                                                                     b=torch.zeros(self.num_envs, self.state_dim))
+            self.shape = sets.HPolytope
+            print("Self.last_safe_action_set = Polytope")
 
     @jaxtyped(typechecker=beartype)
     def reset(self, seed: Optional[int] = None) -> tuple[
@@ -368,14 +378,24 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                              fill=(0, 0, 0))
 
             if self.draw_safe_action_set:
-                if self.last_safe_action_set.generator.sum() == 0:
+                # If invalid, recompute
+                if not hasattr(self, "last_safe_action_set") or self.last_safe_action_set is None:
                     self.safe_action_set()
+                try:
+                    if self.last_safe_action_set.generator.sum() == 0:
+                        self.safe_action_set()
+                except:
+                    pass
 
                 overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
                 overlay_draw = ImageDraw.Draw(overlay)
-
-                draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
-                                         self.last_safe_action_set.generator[i:i + 1, :, :])
+                
+                if self.polytope:
+                    draw_set = self.last_safe_action_set[i]
+                else:
+                    draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
+                                            self.last_safe_action_set.generator[i:i + 1, :, :])
+                
                 vertices = draw_set.vertices().cpu().numpy()
 
                 screen_vertices = [
@@ -406,8 +426,12 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
             Cache the result if it is expensive to compute.
         """
         with torch.no_grad():
-            generator = self.compute_generator()
-            self.last_safe_action_set = sets.Zonotope(self.action_set.center, generator)
+            if self.polytope:
+                A, b = self.compute_A_b()
+                self.last_safe_action_set = self.shape(A=A, b=b)
+            else:
+                generator = self.compute_generator()
+                self.last_safe_action_set = self.shape(self.action_set.center, generator)
 
             return self.last_safe_action_set
 
@@ -475,3 +499,56 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
         length = self.generator_layer(*parameters, solver_args={"solve_method": "Clarabel"})[0]
         return unscaled_generator * length.unsqueeze(1)
+
+    @jaxtyped(typechecker=beartype)
+    def compute_A_b(self) -> tuple[Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+                                Float[Tensor, "{self.batch_dim} {self.action_dim}"]
+    ]:
+
+        agent_position = self.state
+        obstacle_position = self.obstacle_centers
+        obstacle_radius = self.obstacle_radii
+
+        # Half the complete box (environment)
+        boundary_size = (self.additional_observation_set.max - self.additional_observation_set.min) / 2 # Set to int
+
+        b = []
+        A = []
+
+        dim = self.state_set.center.shape[1] # Dimension of environment
+
+        # TODO: this can be optimized using vectorization!
+        # boundary halfspace constraints
+        noise = self.noise_set.sample()
+
+        # Can add noise but prev config just set noise to 0:
+        #b += [boundary_size + agent_position[i] - noise for i in range(dim)]
+
+        b_upper = boundary_size - agent_position
+        b_lower = boundary_size + agent_position
+        b = torch.cat([b_upper, b_lower], dim=1)  # shape: (batch_size, dim*2)
+        I = torch.eye(dim)  # shape: (dim, dim)
+        A = torch.cat([I, -I], dim=0)  # shape: (2*dim, dim)
+        A = A.unsqueeze(0).repeat(self.num_envs, 1, 1)  # shape: (batch_size, 2*dim, dim)
+
+        # action space constraints
+        b += [self.asi] * (2 * dim)
+        A += [[-1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+        A += [[1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
+
+        # obstacle constraints
+        threshold = np.sqrt(dim) * (self.asi + noise)
+        for i in range(len(obstacle_position)):
+            if (
+                np.linalg.norm(obstacle_position[i] - agent_position) - obstacle_radius[i]
+                > threshold
+            ):
+                continue
+
+            b_obs, A_obs = self._halfspace_constraint(
+                agent_position, obstacle_position[i], obstacle_radius[i]
+            )
+            b += [b_obs]
+            A += [A_obs]
+
+        return np.array(A), np.array(b)

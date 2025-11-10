@@ -93,8 +93,8 @@ if __name__ == "__main__":
     experiment_queue = [
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(), #BalancePendulumConfig(), # # # #
-                   safeguard=RayMaskConfig(polytopic_approximation=True), #BoundaryProjectionConfig(),
+                   env=NavigateSeekerConfig(), #BalancePendulumConfig(), # # # # # #
+                   safeguard=RayMaskConfig(zonotopic_approximation = False, polytopic_approximation=True), #BoundaryProjectionConfig(),
                    interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),

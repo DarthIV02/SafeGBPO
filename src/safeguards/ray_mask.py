@@ -81,9 +81,13 @@ class RayMaskSafeguard(Safeguard):
         ## the optimisation then gives use both feasible and safe distances that stull have to be added to get the safe action 
         ## the constraints are from the zonotopes constructs is  just c +G ß | ||ß||<=1 to be then used for cvxpy
         
+        #print("State_constrained")
+        #print(self.state_constrained)
+
         if self.state_constrained:
             safe_center, safe_dist, feasible_dist = self.distance_approximations(action)
         else:
+            #print(self.env.safe_action_set())
             safe_center = self.env.safe_action_set().center
             safe_dist, feasible_dist = self.compute_distances(action, safe_center, self.env.safe_action_set().generator)
 
@@ -161,46 +165,61 @@ class RayMaskSafeguard(Safeguard):
         tol = 1e-8
 
         agent_position = self.env.state
-        obstacle_position = self.env.obstacle_centers[0] #? Check because you only have one???
-        obstacle_radius = self.env.obstacle_radii[0] #? Check because you only have one???
+        print("Agent position")
+        print(agent_position.shape)
+        obstacle_position = self.env.obstacle_centers[0]
+        print("obstacle_position")
+        print(obstacle_position.shape)
+        obstacle_radius = self.env.obstacle_radii[0]
+        print("obstacle_radius")
+        print(obstacle_radius.shape)
 
-        polytope = self.polytope_expansion(agent_position, obstacle_position, obstacle_radius)
+        # Polytope expansion (ensure it supports GPU tensors)
+        A, b = self.env.compute_A_b()
+        polytope = sets.Polytope(A=A, b=b)
 
-        center_np = polytope.center()
-        safe_center = torch.tensor(center_np, device=action.device, dtype=action.dtype)
+        # Center as torch tensor
+        center = polytope.center()
 
-        action_np = action.detach().cpu().numpy().squeeze()
-        low = self.env.action_set.min[0, :].cpu().numpy()
-        high = self.env.action_set.max[0, :].cpu().numpy()
+        # Action space bounds
+        low = self.env.action_set.min[0, :]
+        high = self.env.action_set.max[0, :]
 
-        v = action_np - center_np
+        # Compute direction vector v
+        v = (action.squeeze() - center).squeeze()
 
-        if np.linalg.norm(v) < tol:
-            # Degenerate ray → no movement
-            safe_dist = torch.tensor([[0.0]], device=action.device, dtype=action.dtype)
-            feasible_dist = torch.tensor([[0.0]], device=action.device, dtype=action.dtype)
-            return safe_center, safe_dist, feasible_dist
+        v_norm = torch.norm(v)
+        if v_norm < tol:
+            safe_dist = torch.tensor([[0.0]])
+            feasible_dist = torch.tensor([[0.0]])
+            return center, safe_dist, feasible_dist
 
-        with np.errstate(divide='ignore', invalid='ignore'):
-            inv_v = 1.0 / v
-            t_low = (low - center_np) * inv_v
-            t_high = (high - center_np) * inv_v
+        # Avoid division by zero
+        inv_v = torch.where(v.abs() > tol, 1.0 / v, torch.zeros_like(v))
 
-        t_max_per_dim = np.maximum(t_low, t_high)
-        t_exit = np.nanmin(t_max_per_dim)
-        t_intersect = max(0.0, t_exit)
+        t_low = (low - center) * inv_v
+        t_high = (high - center) * inv_v
 
-        boundary_point_A = center_np + t_intersect * v
-        boundary_point_A = np.clip(boundary_point_A, low, high)
-        feasible_dist_val = float(t_intersect * np.linalg.norm(v))
+        t_max_per_dim = torch.maximum(t_low, t_high)
 
-        boundary_point_Ar = polytope.boundary_point(v).squeeze()
-        safe_dist_val = float(np.linalg.norm(boundary_point_Ar - center_np))
+        t_max_per_dim = torch.where(torch.isnan(t_max_per_dim), torch.inf, t_max_per_dim)
+        t_exit = torch.min(t_max_per_dim)
+        t_intersect = torch.clamp(t_exit, min=0.0)
 
-        safe_dist = torch.tensor([[safe_dist_val]], device=action.device, dtype=action.dtype)
-        feasible_dist = torch.tensor([[feasible_dist_val]], device=action.device, dtype=action.dtype)
+        # Compute feasible boundary
+        boundary_point_A = center + t_intersect * v
+        boundary_point_A = torch.clamp(boundary_point_A, low, high)
+        feasible_dist_val = t_intersect * v_norm
 
-        return safe_center, safe_dist, feasible_dist
+        boundary_point_Ar = torch.as_tensor(
+            polytope.boundary_point(v.detach().cpu().numpy()).squeeze()
+        )
+        safe_dist_val = torch.norm(boundary_point_Ar - center)
+
+        safe_dist = safe_dist_val.view(1, 1)
+        feasible_dist = feasible_dist_val.view(1, 1)
+
+        return center, safe_dist, feasible_dist
 
 
     @jaxtyped(typechecker=beartype)
@@ -261,53 +280,6 @@ class RayMaskSafeguard(Safeguard):
         safe_generator = directions * lengths.unsqueeze(1)
 
         return safe_center, safe_generator
-
-    @jaxtyped(typechecker=beartype)
-    def polytope_expansion(self,
-        agent_position: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
-        obstacle_position: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
-        obstacle_radius: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
-    ) -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
-
-        boundary_size = [self.state_set.min, self.state_set.max] # This might crash
-
-        b = []
-        A = []
-
-        dim = self.state_set.center.shape[1] # Dimension of environment
-
-        # TODO: this can be optimized using vectorization!
-        # boundary halfspace constraints
-        noise = self.noise_set.sample()
-        b += [boundary_size + agent_position[i] - noise for i in range(dim)]
-        b += [boundary_size - agent_position[i] - noise for i in range(dim)]
-        A += [[-1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
-        A += [[1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
-
-        # action space constraints
-        b += [self.asi] * (2 * dim)
-        A += [[-1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
-        A += [[1.0 if i == j else 0 for j in range(dim)] for i in range(dim)]
-
-        # obstacle constraints
-        threshold = np.sqrt(dim) * (self.asi + noise)
-        for i in range(len(obstacle_position)):
-            if (
-                np.linalg.norm(obstacle_position[i] - agent_position) - obstacle_radius[i]
-                > threshold
-            ):
-                continue
-
-            b_obs, A_obs = self._halfspace_constraint(
-                agent_position, obstacle_position[i], obstacle_radius[i]
-            )
-            b += [b_obs]
-            A += [A_obs]
-
-        self._current_safe_input_set = sets.HPolytope(b=np.array(b), A=np.array(A))
-
-        return self._current_safe_input_set
-
 
     @jaxtyped(typechecker=beartype)
     def compute_distances(self,
