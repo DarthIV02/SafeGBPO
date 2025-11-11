@@ -8,7 +8,9 @@ from wandb.sdk.wandb_run import Run
 
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
 from envs.simulators.interfaces.simulator import Simulator
-
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates
+import time
+import psutil
 
 class Logger:
     """
@@ -47,6 +49,14 @@ class Logger:
         self.log_data = {}
         self.last_eval = 0
 
+        nvmlInit()
+        self.gpu_handle = nvmlDeviceGetHandleByIndex(0)
+        self.start_time = time.time()
+        self.num_steps = 0
+        self.process = psutil.Process()  
+
+
+
     @jaxtyped(typechecker=beartype)
     def on_learning_episode(self,
                             eps: int,
@@ -71,6 +81,8 @@ class Logger:
             self.log_data[f"train/log(std_{i})"] = val
         self.log_data["train/Policy Loss"] = policy_loss
         self.log_data["train/Value Loss"] = value_loss
+
+        self.log_performance()
 
         samples = eps * self.model.interactions_per_episode
         if samples - self.last_eval >= self.eval_freq or eps == num_learn_episodes - 1:
@@ -129,3 +141,17 @@ class Logger:
             self.best_reward = avg_eval_reward
 
         return avg_eval_reward
+
+
+    def log_performance(self):
+        elapsed = time.time() - self.start_time
+        gpu_util = nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+        cpu_util = psutil.cpu_percent(interval=None)
+        self.num_steps += 1
+        steps_per_sec = self.num_steps / elapsed
+
+        self.log_data["performance/elapsed_time_sec"] = elapsed
+        self.log_data["performance/steps_per_second"] = steps_per_sec
+        self.log_data["performance/gpu_utilization_mean"] = gpu_util
+        self.log_data["performance/cpu_utilization_mean"] = cpu_util
+ 

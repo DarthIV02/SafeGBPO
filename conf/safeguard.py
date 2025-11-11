@@ -22,3 +22,10 @@ class RayMaskConfig(SafeguardConfig):
     zonotopic_approximation: bool = True
     passthrough: bool = False
 
+@dataclass
+class FSNetConfig(SafeguardConfig):
+    regularisation_coefficient: float = 0.0
+
+@dataclass
+class PinetConfig(SafeguardConfig):
+    regularisation_coefficient: float = 0.0

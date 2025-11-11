@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import torch
 from beartype import beartype
 from jaxtyping import jaxtyped
+from tqdm import tqdm
 
 from learning_algorithms.components.value_function import ValueFunction
 from learning_algorithms.components.policy import Policy
@@ -78,7 +79,7 @@ class LearningAlgorithm(ABC):
         if self.VF_LEARNING_RATE_SCHEDULE == "linear":
             vf_lr_update = (1e-5 - self.value_function_optim.param_groups[0]["lr"]) / num_learn_episodes
 
-        for eps in range(num_learn_episodes):
+        for eps in tqdm(range(num_learn_episodes), desc="Learning", unit="episodes"):
             average_reward, policy_loss, value_loss = self._learn_episode(eps)
 
             for param_group in self.policy_optim.param_groups:
