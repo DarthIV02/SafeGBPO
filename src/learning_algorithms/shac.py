@@ -151,8 +151,9 @@ class SHAC(LearningAlgorithm):
         ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
         
         if self.buffer.store_safe_actions:
-            policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
-                self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
+            #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            policy_loss += self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         policy_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)

@@ -112,6 +112,22 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
+    @abstractmethod
+    def safe_guard_loss(self,
+                        action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+                        safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
+                        ) -> Float[Tensor, "{self.batch_dim}"]:
+        """
+        Compute the safeguard loss for the given action.
+
+        Args:
+            action: The action to compute the loss for.
+        Returns:
+            The safeguard loss.
+        """
+        pass
+
+    @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \
             -> tuple[cp.Expression | np.ndarray, np.ndarray, list[cp.Parameter]]:
         """
