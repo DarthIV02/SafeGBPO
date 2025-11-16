@@ -183,6 +183,9 @@ class HPolytope(ConvexSet):
             
             # solve linear program
             res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=(None, None))
+            #print(f"Center for idx {idx}: {res.x}")
+            #print("A_ub: ", A_ub)
+            #print("b_ub: ", b_ub)
 
             # check empty and unbounded cases
             if res.status == 2:  # infeasible -> empty
@@ -194,7 +197,21 @@ class HPolytope(ConvexSet):
             return self._centers[idx]  # type: ignore
         
         else:
-            return torch.stack([self.center(i) for i in range(self.batch_dim)], dim=0)
+            update = torch.stack([self.center(i) for i in range(self.batch_dim)], dim=0)
+            #print("-----------------------------------")
+            #print(self._centers)
+            return update
+            """except Exception as e:
+                try:
+                    temp = []
+                    for i in range(self.batch_dim):
+                        temp.append(self.center(i))
+                except:
+                    print(f"❌ Failed at center generation for index {i}")
+                    print(f"Centers: {self._centers}")
+                    print(f"Center: {self._centers[i]}")
+                    print(f"Error: {e}")
+                    raise Exception(f"Missing value at batch index {i}") from e"""
 
     def draw(self, ax=None, batch_idx: int = 0, color="blue", **kwargs):
         """Draw a specific 2D polytope in the batch."""
@@ -230,7 +247,7 @@ class HPolytope(ConvexSet):
             prob.solve()
 
             if prob.status not in ["optimal", "optimal_inaccurate"]:
-                print("------------- Description -------------------")
+                print("------------- Description of boundary point fail -------------------")
                 print(A_np)
                 print(b_np)
                 print(dir_np)

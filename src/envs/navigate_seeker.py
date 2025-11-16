@@ -396,12 +396,16 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     b_i = self.last_safe_action_set.b[i]          # (num_constraints,)
                     s_i = self.state[i]                            # (dim,)
 
-                    b_shifted = (b_i + A_i @ s_i)                  # (num_constraints,)
+                    b_shifted = (b_i + torch.matmul(A_i, s_i))                  # (num_constraints,)
                     draw_set = sets.HPolytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
+                    draw_set._centers[0] = None
                     vertices, mask = draw_set.vertices()
 
-                    vertices = vertices[mask].cpu().numpy().T
+                    vertices = vertices[mask].cpu().numpy()
+
+                    # Order CCW so polygon can be drawn without self-crossing
+                    vertices = self.order_vertices_ccw(vertices).T
 
                 else:
                     draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
@@ -428,6 +432,22 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
             self.last_safe_action_set.A *= 0.0
 
         return frames
+
+    def order_vertices_ccw(self, points):
+        # If points are (2, N), transpose to (N, 2)
+        transposed = False
+        if points.shape[0] == 2:
+            points = points.T
+            transposed = True  # remember original format
+
+        center = points.mean(axis=0)
+        angles = np.arctan2(points[:, 1] - center[1],
+                            points[:, 0] - center[0])
+        order = np.argsort(angles)
+        ordered = points[order]
+
+        # return in original shape
+        return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
     def safe_action_set(self) -> Union[sets.Zonotope, sets.HPolytope]:

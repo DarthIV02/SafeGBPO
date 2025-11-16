@@ -10,7 +10,7 @@ from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_device("cpu") # "cuda" if torch.cuda.is_available() else
 torch.set_default_dtype(torch.float64)
 
 
@@ -94,9 +94,9 @@ if __name__ == "__main__":
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(), #BalancePendulumConfig(), # # # # # #
-                   safeguard=RayMaskConfig(zonotopic_approximation = False, polytopic_approximation=True), #BoundaryProjectionConfig(),
+                   safeguard=RayMaskConfig(zonotopic_approximation = True, polytopic_approximation=False), #BoundaryProjectionConfig(),
                    interactions=60_000,
-                   eval_freq=500,
+                   eval_freq=5_000,
                    fast_eval=False),
     ]
 
