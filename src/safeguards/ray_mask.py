@@ -32,6 +32,7 @@ class RayMaskSafeguard(Safeguard):
     @jaxtyped(typechecker=beartype)
     def __init__(self,
                  env: SafeEnv,
+                 regularisation_coefficient: float,
                  linear_projection: bool,
                  zonotopic_approximation: bool,
                  passthrough: bool,
@@ -58,6 +59,7 @@ class RayMaskSafeguard(Safeguard):
         self.zonotope_distance_layer = None
         self.boundary_projection_safeguard = None
         self.implicit_zonotope_distance_layer = None
+        self.regularisation_coefficient = regularisation_coefficient
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -346,3 +348,7 @@ class RayMaskSafeguard(Safeguard):
                                     self.axis_aligned_unit_box_dist(safe_center, -directions))
 
         return safe_center, safe_dist, feasible_dist
+
+    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
