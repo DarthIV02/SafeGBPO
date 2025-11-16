@@ -54,6 +54,7 @@ class RayMaskSafeguard(Safeguard):
             self.distance_approximations = self.zonotopic_approximation
         elif polytopic_approximation:
             self.distance_approximations = self.polytopic_approximation
+            self.state_constrained = True
         else:
             self.distance_approximations = self.orthogonal_approximation
 
@@ -81,9 +82,6 @@ class RayMaskSafeguard(Safeguard):
         ## the optimisation then gives use both feasible and safe distances that stull have to be added to get the safe action 
         ## the constraints are from the zonotopes constructs is  just c +G ß | ||ß||<=1 to be then used for cvxpy
         
-        #print("State_constrained")
-        #print(self.state_constrained)
-
         if self.state_constrained:
             safe_center, safe_dist, feasible_dist = self.distance_approximations(action)
         else:
@@ -163,63 +161,49 @@ class RayMaskSafeguard(Safeguard):
         """
 
         tol = 1e-8
+        batch, dim = action.shape
 
-        agent_position = self.env.state
-        print("Agent position")
-        print(agent_position.shape)
-        obstacle_position = self.env.obstacle_centers[0]
-        print("obstacle_position")
-        print(obstacle_position.shape)
-        obstacle_radius = self.env.obstacle_radii[0]
-        print("obstacle_radius")
-        print(obstacle_radius.shape)
+        # ----- Compute polytope -----
+        A, b = self.env.compute_A_b()  # A: (B, num_constraints, D), b: (B, num_constraints)
+        
+        # Polytope center for each batch
+        polytopes = sets.HPolytope(A=A, b=b)
+        centers = polytopes.center()  # (B, D)
 
-        # Polytope expansion (ensure it supports GPU tensors)
-        A, b = self.env.compute_A_b()
-        polytope = sets.Polytope(A=A, b=b)
+        # ----- Action space bounds -----
+        low = self.env.action_set.min[:, :]  # (B, D)
+        high = self.env.action_set.max[:, :]  # (B, D)
 
-        # Center as torch tensor
-        center = polytope.center()
-
-        # Action space bounds
-        low = self.env.action_set.min[0, :]
-        high = self.env.action_set.max[0, :]
-
-        # Compute direction vector v
-        v = (action.squeeze() - center).squeeze()
-
-        v_norm = torch.norm(v)
-        if v_norm < tol:
-            safe_dist = torch.tensor([[0.0]])
-            feasible_dist = torch.tensor([[0.0]])
-            return center, safe_dist, feasible_dist
+        # ----- Direction vector per batch -----
+        v = action - centers  # (B, D)
+        v_norm = torch.norm(v, dim=1, keepdim=True)  # (B, 1)
 
         # Avoid division by zero
-        inv_v = torch.where(v.abs() > tol, 1.0 / v, torch.zeros_like(v))
+        inv_v = torch.where(v.abs() > tol, 1.0 / (v + tol * (v==0)), torch.zeros_like(v))
 
-        t_low = (low - center) * inv_v
-        t_high = (high - center) * inv_v
+        t_low = (low - centers) * inv_v  # (B, D)
+        t_high = (high - centers) * inv_v  # (B, D)
 
-        t_max_per_dim = torch.maximum(t_low, t_high)
-
+        # Max distance along direction before hitting box
+        t_max_per_dim = torch.maximum(t_low, t_high)  # (B, D)
         t_max_per_dim = torch.where(torch.isnan(t_max_per_dim), torch.inf, t_max_per_dim)
-        t_exit = torch.min(t_max_per_dim)
-        t_intersect = torch.clamp(t_exit, min=0.0)
 
-        # Compute feasible boundary
-        boundary_point_A = center + t_intersect * v
-        boundary_point_A = torch.clamp(boundary_point_A, low, high)
-        feasible_dist_val = t_intersect * v_norm
+        t_exit = torch.min(t_max_per_dim, dim=1, keepdim=True).values  # (B, 1)
+        t_exit = torch.clamp(t_exit, min=0.0)
 
-        boundary_point_Ar = torch.as_tensor(
-            polytope.boundary_point(v.detach().cpu().numpy()).squeeze()
-        )
-        safe_dist_val = torch.norm(boundary_point_Ar - center)
+        # ----- Feasible boundary -----
+        feasible_boundary = centers + t_exit * v  # (B, D)
+        feasible_boundary = torch.max(torch.min(feasible_boundary, high), low)  # clamp to box
+        feasible_dist = t_exit * v_norm  # (B, 1)
 
-        safe_dist = safe_dist_val.view(1, 1)
-        feasible_dist = feasible_dist_val.view(1, 1)
+        # ----- Safe distance along polytope boundary -----
+        # Use polytope.boundary_point for each batch direction
 
-        return center, safe_dist, feasible_dist
+        safe_boundary_points = polytopes.boundary_point(v)
+
+        safe_dist = torch.norm(safe_boundary_points - centers, dim=1, keepdim=True)  # (B, 1)
+
+        return centers, safe_dist, feasible_dist
 
 
     @jaxtyped(typechecker=beartype)

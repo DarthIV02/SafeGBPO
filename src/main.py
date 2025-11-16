@@ -96,7 +96,7 @@ if __name__ == "__main__":
                    env=NavigateSeekerConfig(), #BalancePendulumConfig(), # # # # # #
                    safeguard=RayMaskConfig(zonotopic_approximation = False, polytopic_approximation=True), #BoundaryProjectionConfig(),
                    interactions=60_000,
-                   eval_freq=5_000,
+                   eval_freq=500,
                    fast_eval=False),
     ]
 

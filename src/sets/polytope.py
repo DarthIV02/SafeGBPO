@@ -1,5 +1,6 @@
 from typing import Self
 import cvxpy as cp
+from cvxpylayers.torch import CvxpyLayer
 import numpy as np
 import torch
 from beartype import beartype
@@ -7,6 +8,7 @@ from jaxtyping import jaxtyped, Float, Bool
 from torch import Tensor
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from scipy.optimize import linprog
 
 from sets.interface.convex_set import ConvexSet
 
@@ -39,6 +41,7 @@ class HPolytope(ConvexSet):
         self.batch_dim = A.shape[0]
         self.num_constraints = A.shape[1]
         self.dim = A.shape[2]
+        self.device = A.device
         self._centers: list[Tensor | None] = [None] * self.batch_dim
 
     def __iter__(self):
@@ -54,13 +57,13 @@ class HPolytope(ConvexSet):
             raise TypeError(f"Invalid index type {type(idx)}")
 
     @staticmethod
-    def from_unit_box(batch_dim: int, dim: int) -> Self:
+    def from_unit_box(self) -> Self:
         """Create batched unit boxes [-1, 1]^dim."""
-        eye = torch.eye(dim)
+        eye = torch.eye(self.dim)
         A_single = torch.cat([eye, -eye], dim=0)               # [2*dim, dim]
         b_single = torch.ones(2 * dim)                         # [2*dim]
-        A = A_single.unsqueeze(0).repeat(batch_dim, 1, 1)
-        b = b_single.unsqueeze(0).repeat(batch_dim, 1)
+        A = A_single.unsqueeze(0).repeat(self.batch_dim, 1, 1)
+        b = b_single.unsqueeze(0).repeat(self.batch_dim, 1)
         return HPolytope(A, b)
 
     @jaxtyped(typechecker=beartype)
@@ -79,8 +82,8 @@ class HPolytope(ConvexSet):
         """Alias for contains_point()."""
         return self.contains_point(points)
 
-    def vertices(self) -> list[Float[Tensor, "num_vert dim"]]:
-        """Compute vertices for each polytope using pypoman."""
+    """def vertices(self) -> list[Float[Tensor, "num_vert dim"]]:
+        # Compute vertices for each polytope using pypoman.
         import pypoman
         verts_all = []
         for i in range(self.batch_dim):
@@ -88,17 +91,109 @@ class HPolytope(ConvexSet):
             b_np = self.b[i].detach().cpu().numpy()
             verts_np = np.array(pypoman.compute_polytope_vertices(A_np, b_np))
             verts_all.append(torch.tensor(verts_np, dtype=self.A.dtype, device=self.A.device))
-        return verts_all
+        return verts_all"""
 
-    def center(self, idx: int | None = None) -> Float[Tensor, "dim"]:
-        """Compute or return cached approximate center of a given batch polytope."""
+    # Changed for now to boxes only 
+    ## CHECK: might crash for 0 padding...
+
+    def vertices(self) -> tuple[Tensor, Tensor]:
+        """Compute vertices for each polytope as a padded tensor.
+
+        Returns:
+            verts_tensor: (batch, max_num_vert, dim) tensor of vertices (padded with zeros)
+            mask: (batch, max_num_vert) boolean tensor, True if that row is a valid vertex
+        """
+        verts_list = []
+        max_vertices = 0
+
+        for i in range(self.batch_dim):
+            A_i = self.A[i]   # (num_constraints, dim)
+            b_i = self.b[i]   # (num_constraints,)
+
+            dim = A_i.shape[1]
+            lower = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
+            upper = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
+
+            for j in range(dim):
+                mask_pos = (A_i[:, j] > 0)
+                mask_neg = (A_i[:, j] < 0)
+                if mask_pos.any():
+                    upper[j] = b_i[mask_pos].min()
+                if mask_neg.any():
+                    lower[j] = -b_i[mask_neg].min()
+
+            # Cartesian product for corners
+            from itertools import product
+            corners = torch.tensor(list(product(*zip(lower.tolist(), upper.tolist()))),
+                                device=A_i.device, dtype=A_i.dtype)  # (num_vert, dim)
+            verts_list.append(corners)
+            max_vertices = max(max_vertices, corners.shape[0])
+
+        # Pad to max_vertices
+        batch = self.batch_dim
+        dim = self.A.shape[2]
+        verts_tensor = torch.zeros(batch, max_vertices, dim, device=self.A.device, dtype=self.A.dtype)
+        mask = torch.zeros(batch, max_vertices, dtype=torch.bool, device=self.A.device)
+
+        for i, corners in enumerate(verts_list):
+            n = corners.shape[0]
+            verts_tensor[i, :n] = corners
+            mask[i, :n] = 1
+
+        return verts_tensor, mask
+
+    def center(self, idx: int | None = None) -> Float[Tensor, "batch_dim dim"]:
+        """Computation of the Chebyshev center of an HPolyhedron HP via linear programming.
+        Defined as the center with the ball of largest radius contained in HP.
+
+        Raises:
+            EmptySetError: Set is empty.
+            UnboundedSetError: Set is unbounded. LP could not converge.
+
+        Returns:
+            np.ndarray: Chebyshev center.
+        """
+
+        B, num_constraints, dim = self.A.shape
+        
         if idx is not None:
-            if self._centers[idx] is None:
-                verts = self.vertices()[idx]
-                self._centers[idx] = verts.mean(dim=0)
-            return self._centers[idx]
+            if self._centers[idx] is not None:
+                return self._centers[idx]
+
+            # objective function
+            c = np.hstack((-1, np.zeros(dim)))
+
+            # inequality constraints
+            mask = torch.isfinite(self.b[idx])
+            b_ub = np.hstack((0, self.b[idx, mask].cpu().detach()))
+
+            A_ub = np.vstack(
+                (
+                    np.hstack((-1, np.zeros(dim))),
+                    np.hstack(
+                        (
+                            np.reshape(
+                                np.linalg.norm(self.A[idx, mask].cpu().detach(), axis=1, ord=2), (sum(mask), 1)
+                            ),
+                            self.A[idx, mask].cpu().detach(),
+                        )
+                    ),
+                )
+            )
+            
+            # solve linear program
+            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=(None, None))
+
+            # check empty and unbounded cases
+            if res.status == 2:  # infeasible -> empty
+                raise EmptySetError
+            elif res.status == 3:  # unbounded
+                raise UnboundedSetError
+
+            self._centers[idx] = torch.Tensor(res.x[1:]).to(self.device)
+            return self._centers[idx]  # type: ignore
+        
         else:
-            # Compute all centers
             return torch.stack([self.center(i) for i in range(self.batch_dim)], dim=0)
 
     def draw(self, ax=None, batch_idx: int = 0, color="blue", **kwargs):
@@ -123,18 +218,23 @@ class HPolytope(ConvexSet):
         """
         results = []
         for i in range(self.batch_dim):
-            A_np = self.A[i].cpu().numpy()
-            b_np = self.b[i].cpu().numpy()
-            dir_np = directions[i].cpu().numpy()
-            center_np = self.center(i).cpu().numpy()
+            A_np = self.A[i].cpu().detach().numpy()
+            b_np = self.b[i].cpu().detach().numpy()
+            dir_np = directions[i].cpu().detach().numpy()
+            center_np = self.center(i).cpu().detach().numpy()
 
             x = cp.Variable(self.dim)
             l = cp.Variable()
             constraints = [A_np @ x <= b_np, x == center_np + l * dir_np]
             prob = cp.Problem(cp.Maximize(l), constraints)
-            prob.solve(solver=cp.ECOS, verbose=False)
+            prob.solve()
 
             if prob.status not in ["optimal", "optimal_inaccurate"]:
+                print("------------- Description -------------------")
+                print(A_np)
+                print(b_np)
+                print(dir_np)
+                print(center_np)
                 raise RuntimeError(f"LP failed for batch {i}: {prob.status}")
 
             boundary_np = center_np + l.value * dir_np
