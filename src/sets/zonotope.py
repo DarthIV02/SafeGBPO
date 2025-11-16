@@ -323,7 +323,7 @@ class Zonotope(ConvexSet):
     # return how far points(NN outputs) are outside the zonotope
     # use for FSNet loss as validation
     @jaxtyped(typechecker=beartype)
-    def validation(self, points: Float[Tensor, "{self.batch_dim} {self_dim}"],
+    def validation(self, points: Float[Tensor, "{self.batch_dim} {self.dim}"], # fixed typo(self_dim -> self.dim)
                    p: int =2) -> Float[Tensor, "{self.batch_dim}"]:
 
         radii = self.generator.abs().sum(dim=2)
@@ -334,7 +334,7 @@ class Zonotope(ConvexSet):
         below = torch.clamp(lower - points, min=0.0)
         above = torch.clamp(points - upper, min=0.0)
 
-        per_dim_violation = below + above  # (batch_dim, dim)
+        per_dim_violation = below + above
 
         if p == float("inf"):
             # L-infinity norm across dimensions
