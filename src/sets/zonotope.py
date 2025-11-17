@@ -268,6 +268,37 @@ class Zonotope(ConvexSet):
         elif isinstance(other, sets.Zonotope):
             # Overapproximation
             return self.box().intersects(other.box())
+        elif isinstance(other, sets.Polytope):
+            # Check with TIM
+            batch, dim = self.center.shape
+            num_gens = self.generator.shape[1]
+
+            # 1. Compute the "radius" along each generator direction for overapproximation
+            z_radius = self.generator.abs().sum(dim=1)  # (batch, dim) conservative box overapproximation
+
+            # 2. Choose ray directions: from Zonotope center to Polytope center (or arbitrary inside Polytope)
+            poly_center = torch.zeros(dim, device=self.center.device)  # approximate polytope center as 0
+            ray_dir = poly_center.unsqueeze(0) - self.center            # (batch, dim)
+            ray_norm = torch.norm(ray_dir, dim=1, keepdim=True)
+            ray_unit = ray_dir / (ray_norm + 1e-8)                   # avoid division by zero
+
+            # 3. Compute intersections along each ray using the parallel function
+            t_lower, t_upper = ray_hyperplane_intersections_parallel(
+                c=self.center,
+                d=ray_unit,
+                A=other.A,
+                b=other.b,
+                epsilon=epsilon
+            )
+
+            # 4. Check if Zonotope extent along ray intersects polytope
+            # Approximate Zonotope as a line segment: [-z_radius_along_ray, z_radius_along_ray]
+            z_radius_along_ray = torch.sum(z_radius * ray_unit.abs(), dim=1)  # (batch,)
+
+            # Polytope intersects if its range along the ray overlaps with Zonotope extent
+            intersects = (t_upper + z_radius_along_ray >= 0) & (t_lower - z_radius_along_ray <= 0)
+            
+            return intersects
         else:
             raise NotImplementedError(
                 f"Intersection check not implemented for {type(other)}")

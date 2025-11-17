@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.logger import Logger
 
+from tqdm import tqdm
 
 class LearningAlgorithm(ABC):
     """
@@ -68,7 +69,7 @@ class LearningAlgorithm(ABC):
 
         ## Yasin note: 
         ## this is the main function where the training happens for the policy. 
-        ## only self._learn_episode is important here and its defined  by the respective learning_algortithm like ppo
+        ## only self._learn_episode is important here and its defined  by the respective learning_algortithm like ppo4
 
         num_learn_episodes = interactions // self.interactions_per_episode
 
@@ -88,7 +89,8 @@ class LearningAlgorithm(ABC):
                 param_group["lr"] += vf_lr_update
 
             with torch.no_grad():
-                logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes)
+                if logger:
+                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes)
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod

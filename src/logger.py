@@ -75,8 +75,10 @@ class Logger:
         """
         self.log_performance()
         self.log_data["train/Average Reward"] = average_reward
+        print("Interventions Logger: ")
         if hasattr(self.env, "interventions"):
             self.log_data["train/Interventions"] = self.env.interventions
+            print(self.env.interventions)
         for i, val in enumerate(self.model.policy.log_std.detach().cpu().numpy()):
             self.log_data[f"train/log(std_{i})"] = val
         self.log_data["train/Policy Loss"] = policy_loss
@@ -118,7 +120,8 @@ class Logger:
         terminal = False
         steps = 0
         while not terminal:
-            action = self.model.policy.predict(observation, deterministic=True)
+            action = self.model.policy.predict(observation, deterministic=True) # But unsafe action no?
+            
             observation, reward, terminated, truncated, info = self.eval_env.step(action)
             terminal = (terminated | truncated)[0].item()
             if record:
