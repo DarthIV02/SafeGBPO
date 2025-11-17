@@ -22,7 +22,7 @@ class FSNetSafeguard(Safeguard):
                  ineq_pen_coefficient: float,
                  val_tol: float,
                  memory_size: int,
-                 maxmax_iter_iter: int,
+                 max_iter: int,
                  max_diff_iter,
                  scale : float,
                  **kwargs):
@@ -36,10 +36,11 @@ class FSNetSafeguard(Safeguard):
         self.config_method = {
             'val_tol': val_tol,
             'memory_size': memory_size,
-            'max_iter': maxmax_iter_iter,
+            'max_iter': max_iter,
             'max_diff_iter': max_diff_iter,
             'scale': scale,
         }
+        self.data = PolytopeData(env)
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -53,13 +54,11 @@ class FSNetSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
-        #TODO: define self.data
-
-        self.pre_eq_violation = self.data.eq_resid(self.observations(), action).square().sum(dim=1)
-        self.pre_ineq_violation = self.data.ineq_resid(self.observations(), action).square().sum(dim=1)
-
+        
+        self.pre_eq_violation = self.data.eq_resid(None, action).square().sum(dim=1)
+        self.pre_ineq_violation = self.data.ineq_resid(None, action).square().sum(dim=1)
         safe_action = hybrid_lbfgs_solve(
-            self.observations(),
+            None,
             action,
             self.data,
             val_tol=self.config_method['val_tol'],
@@ -225,7 +224,12 @@ def _create_objective_function(x: torch.Tensor, data, scale: float) -> Callable[
 def _check_convergence(f_val: torch.Tensor, g: torch.Tensor, config: LBFGSConfig) -> torch.Tensor:
     """Check convergence criteria."""
     val_converged = f_val / config.scale < config.val_tol
-    grad_converged = g.norm(dim=1) < config.grad_tol
+    # Handle both batch and non-batch gradients
+    if g.dim() > 1:
+        grad_norm = g.norm(dim=1)
+    else:
+        grad_norm = g.norm()
+    grad_converged = grad_norm < config.grad_tol
     return val_converged | grad_converged
 
 
@@ -571,3 +575,24 @@ def hybrid_lbfgs_solve(
     
     # Return with gradient connection only to differentiable phase
     return y + (y_nondiff - y).detach()
+
+
+
+class PolytopeData:
+    def __init__(self,env):
+        self.env = env
+        
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        A, b = self.env.compute_A_b()
+        # Ensure A and b are torch tensors
+        if not isinstance(A, torch.Tensor):
+            A = torch.as_tensor(A, dtype=Y.dtype, device=Y.device)
+        if not isinstance(b, torch.Tensor):
+            b = torch.as_tensor(b, dtype=Y.dtype, device=Y.device)
+        return torch.relu(A @ Y.unsqueeze(-1) - b.unsqueeze(-1)).squeeze(-1)
+    
+    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+
+
+  
