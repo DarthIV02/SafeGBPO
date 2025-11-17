@@ -90,12 +90,72 @@ if __name__ == "__main__":
     ## Yasin note: 
     ## we can define multiple Experiment runs in the queue. the Experiment is basically just all the configs that are then loaded in run_experiment()
     ## an Experiment defines mainly the learning algorithm, safeguard and important for us the enviroment  
+ 
+     # this is the experiment for the benchmarking in the paper
     experiment_queue = [
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(), #BalancePendulumConfig(), # # # # # #
-                   safeguard=RayMaskConfig(zonotopic_approximation = True, polytopic_approximation=False), #BoundaryProjectionConfig(),
-                   interactions=60_000,
+                   env=NavigateSeekerConfig(),
+                   safeguard=None,
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=BoundaryProjectionConfig(),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=RayMaskConfig(zonotopic_approximation=True),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=RayMaskConfig(zonotopic_approximation=False),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=FSNetConfig(),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=PinetConfig(),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+    ]
+
+    # this is for testing purposes only
+    experiment_queue = [
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=BalancePendulumConfig(),
+                   safeguard=BoundaryProjectionConfig(),
+                   interactions=15_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=BalancePendulumConfig(),
+                   safeguard=RayMaskConfig(zonotopic_approximation=True),
+                   interactions=15_000,
                    eval_freq=5_000,
                    fast_eval=False),
     ]

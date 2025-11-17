@@ -8,7 +8,9 @@ from wandb.sdk.wandb_run import Run
 
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
 from envs.simulators.interfaces.simulator import Simulator
-
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates
+import time
+import psutil
 
 class Logger:
     """
@@ -47,6 +49,13 @@ class Logger:
         self.log_data = {}
         self.last_eval = 0
 
+        nvmlInit()
+        self.gpu_handle = nvmlDeviceGetHandleByIndex(0)
+        self.intermediate_time = time.time()
+        self.process = psutil.Process()  
+
+
+
     @jaxtyped(typechecker=beartype)
     def on_learning_episode(self,
                             eps: int,
@@ -64,6 +73,7 @@ class Logger:
             value_loss: The value loss
             num_learn_episodes: The total number of learning episodes
         """
+        self.log_performance()
         self.log_data["train/Average Reward"] = average_reward
         print("Interventions Logger: ")
         if hasattr(self.env, "interventions"):
@@ -73,6 +83,7 @@ class Logger:
             self.log_data[f"train/log(std_{i})"] = val
         self.log_data["train/Policy Loss"] = policy_loss
         self.log_data["train/Value Loss"] = value_loss
+
 
         samples = eps * self.model.interactions_per_episode
         if samples - self.last_eval >= self.eval_freq or eps == num_learn_episodes - 1:
@@ -88,6 +99,7 @@ class Logger:
         if self.optuna_trial is not None and self.optuna_trial.should_prune():
             self.wandb_run.finish()
             raise TrialPruned()
+        self.intermediate_time = time.time()
 
     @jaxtyped(typechecker=beartype)
     def evaluate_policy(self, eps: int, num_learn_episodes: int) -> float:
@@ -132,3 +144,15 @@ class Logger:
             self.best_reward = avg_eval_reward
 
         return avg_eval_reward
+
+
+    def log_performance(self):
+        gpu_util = nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+        cpu_util = psutil.cpu_percent(interval=None)
+        steps_per_sec =  self.model.interactions_per_episode / (time.time() - self.intermediate_time)
+        episodes_per_sec = 1 / (time.time() - self.intermediate_time)
+        self.log_data["performance/episodes_per_second"] = episodes_per_sec
+        self.log_data["performance/steps_per_second"] = steps_per_sec
+        self.log_data["performance/gpu_utilization_mean"] = gpu_util
+        self.log_data["performance/cpu_utilization_mean"] = cpu_util
+ 

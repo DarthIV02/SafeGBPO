@@ -3,6 +3,7 @@ from torch import Tensor
 from beartype import beartype
 from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import Float, jaxtyped
+import torch
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -13,9 +14,11 @@ class BoundaryProjectionSafeguard(Safeguard):
     """
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, env: SafeEnv, **kwargs):
+    def __init__(self, env: SafeEnv,
+                 regularisation_coefficient: float,
+                **kwargs):
         Safeguard.__init__(self, env)
-
+        self.regularisation_coefficient = regularisation_coefficient
         self.boundary_layer = None
         self.num_interventions = 0
 
@@ -80,3 +83,6 @@ class BoundaryProjectionSafeguard(Safeguard):
         return safe_action
 
 
+    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
