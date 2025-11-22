@@ -19,7 +19,8 @@ class BoundaryProjectionConfig(SafeguardConfig):
 class RayMaskConfig(SafeguardConfig):
     regularisation_coefficient: float = 0.1
     linear_projection: bool = True
-    zonotopic_approximation: bool = True
+    zonotopic_approximation: bool = False
+    polytopic_approximation: bool = True
     passthrough: bool = False
 
 @dataclass

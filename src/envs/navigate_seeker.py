@@ -400,9 +400,14 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     draw_set = sets.HPolytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
-                    vertices, mask = draw_set.vertices()
+                    result = draw_set.vertices()
 
-                    vertices = vertices[mask].cpu().numpy()
+                    try:
+                        vertices, mask = result       # function returned 2 values
+                        vertices = vertices[mask].cpu().numpy()
+                    except ValueError:
+                        vertices = result             # function returned only 1 value
+                        mask = None
 
                     # Order CCW so polygon can be drawn without self-crossing
                     vertices = self.order_vertices_ccw(vertices).T
