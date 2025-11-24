@@ -11,7 +11,12 @@ from matplotlib.patches import Polygon
 from scipy.optimize import linprog
 
 from sets.interface.convex_set import ConvexSet
+import types
+import sys
+sys.modules['cdd'] = types.ModuleType("cdd")
 
+from pypoman import compute_polytope_vertices
+from scipy.spatial import HalfspaceIntersection
 
 class HPolytope(ConvexSet):
     """
@@ -96,51 +101,89 @@ class HPolytope(ConvexSet):
     # Changed for now to boxes only 
     ## CHECK: might crash for 0 padding...
 
-    def vertices(self) -> tuple[Tensor, Tensor]:
-        """Compute vertices for each polytope as a padded tensor.
+    """def vertices(self) -> tuple[Tensor, Tensor]:"""
+    """Compute vertices for each polytope as a padded tensor.
 
-        Returns:
-            verts_tensor: (batch, max_num_vert, dim) tensor of vertices (padded with zeros)
-            mask: (batch, max_num_vert) boolean tensor, True if that row is a valid vertex
-        """
-        verts_list = []
-        max_vertices = 0
+    Returns:
+        verts_tensor: (batch, max_num_vert, dim) tensor of vertices (padded with zeros)
+        mask: (batch, max_num_vert) boolean tensor, True if that row is a valid vertex
+    """
+    """verts_list = []
+    max_vertices = 0
 
-        for i in range(self.batch_dim):
-            A_i = self.A[i]   # (num_constraints, dim)
-            b_i = self.b[i]   # (num_constraints,)
+    for i in range(self.batch_dim):
+        A_i = self.A[i]   # (num_constraints, dim)
+        b_i = self.b[i]   # (num_constraints,)
 
-            dim = A_i.shape[1]
-            lower = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
-            upper = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
+        dim = A_i.shape[1]
+        lower = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
+        upper = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
 
-            for j in range(dim):
-                mask_pos = (A_i[:, j] > 0)
-                mask_neg = (A_i[:, j] < 0)
-                if mask_pos.any():
-                    upper[j] = b_i[mask_pos].min()
-                if mask_neg.any():
-                    lower[j] = -b_i[mask_neg].min()
+        for j in range(dim):
+            mask_pos = (A_i[:, j] > 0)
+            mask_neg = (A_i[:, j] < 0)
+            if mask_pos.any():
+                upper[j] = b_i[mask_pos].min()
+            if mask_neg.any():
+                lower[j] = -b_i[mask_neg].min()
 
-            # Cartesian product for corners
-            from itertools import product
-            corners = torch.tensor(list(product(*zip(lower.tolist(), upper.tolist()))),
-                                device=A_i.device, dtype=A_i.dtype)  # (num_vert, dim)
-            verts_list.append(corners)
-            max_vertices = max(max_vertices, corners.shape[0])
+        # Cartesian product for corners
+        from itertools import product
+        corners = torch.tensor(list(product(*zip(lower.tolist(), upper.tolist()))),
+                            device=A_i.device, dtype=A_i.dtype)  # (num_vert, dim)
+        verts_list.append(corners)
+        max_vertices = max(max_vertices, corners.shape[0])
 
-        # Pad to max_vertices
-        batch = self.batch_dim
-        dim = self.A.shape[2]
-        verts_tensor = torch.zeros(batch, max_vertices, dim, device=self.A.device, dtype=self.A.dtype)
-        mask = torch.zeros(batch, max_vertices, dtype=torch.bool, device=self.A.device)
+    # Pad to max_vertices
+    batch = self.batch_dim
+    dim = self.A.shape[2]
+    verts_tensor = torch.zeros(batch, max_vertices, dim, device=self.A.device, dtype=self.A.dtype)
+    mask = torch.zeros(batch, max_vertices, dtype=torch.bool, device=self.A.device)
 
-        for i, corners in enumerate(verts_list):
-            n = corners.shape[0]
-            verts_tensor[i, :n] = corners
-            mask[i, :n] = 1
+    for i, corners in enumerate(verts_list):
+        n = corners.shape[0]
+        verts_tensor[i, :n] = corners
+        mask[i, :n] = 1
 
-        return verts_tensor, mask
+    return verts_tensor, mask"""
+
+    def vertices(self) -> np.array:
+        # obtain minimal representation
+        A = np.asarray(self.A[0])
+        b = np.asarray(self.b[0])
+
+        # ---- Step 1: Find an interior point by maximizing slack ----
+        n = self.dim
+
+        # Variables: x (n dims) and t (slack)
+        c = np.zeros(n + 1)
+        c[-1] = -1  # maximize t -> minimize -t
+
+        # A x + t <= b  ->  [A | 1] @ [x, t] <= b
+        b_ub = b[np.isfinite(b)]
+        unpadded_shape = b_ub.shape[0]
+
+        A_ub = np.hstack([A[:unpadded_shape], np.ones((unpadded_shape, 1))])     
+
+        res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(None, None)] * n + [(0, None)])
+        if not res.success or res.x[-1] <= 1e-9:
+            raise ValueError("Polytope appears to have no interior.")
+
+        interior_point = res.x[:-1]
+
+        # ---- Step 2: Build halfspaces for QHull ----
+        # QHull uses A x + b <= 0 convention, so convert:
+        # A x <= b  ->  A x - b <= 0
+        halfspaces = np.hstack([A, -b.reshape(-1, 1)])
+
+        # ---- Step 3: Compute vertices ----
+        hs = HalfspaceIntersection(halfspaces, interior_point)
+        V = hs.intersections
+        
+        # format vertices correctly
+        V = np.reshape(V, (len(V), n))
+
+        return V
 
     def center(self, idx: int | None = None) -> Float[Tensor, "batch_dim dim"]:
         """Computation of the Chebyshev center of an HPolyhedron HP via linear programming.

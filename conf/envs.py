@@ -55,7 +55,6 @@ class NavigateSeekerConfig(EnvConfig):
     draw_safe_action_set: bool = True
     polytopic_approach: bool = True
 
-
 @dataclass
 class ManageHouseholdConfig(EnvConfig):
     num_envs: int = 8
