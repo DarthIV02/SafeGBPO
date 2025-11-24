@@ -40,7 +40,10 @@ class FSNetSafeguard(Safeguard):
             'max_diff_iter': max_diff_iter,
             'scale': scale,
         }
-        self.data = PolytopeData(env)
+        if self.env.polytope:
+            self.data = PolytopeData(env)
+        else:
+            self.data = BoxData(env)
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -107,7 +110,31 @@ class PolytopeData:
             A = torch.as_tensor(A, dtype=Y.dtype, device=Y.device)
         if not isinstance(b, torch.Tensor):
             b = torch.as_tensor(b, dtype=Y.dtype, device=Y.device)
+        # ensure no gradient flows through A and b
+        A = A.detach()
+        b = b.detach()
         return torch.relu(A @ Y.unsqueeze(2) - b.unsqueeze(2))
+    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+    
+class BoxData: #TODO: this is really slow for some reason. i guess its because of double the constraints
+    def __init__(self,env):
+        self.env = env
+        
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        box = self.env.safe_action_set().box()
+        center = box.center
+        gen = box.generator
+
+        if gen.dim() == 3:
+            half_extents = gen.abs().sum(dim=2)  # (batch_box, dim)
+        else:
+            half_extents = gen.abs()
+
+        box_min = (center - half_extents).to(dtype=Y.dtype, device=Y.device).detach()
+        box_max = (center + half_extents).to(dtype=Y.dtype, device=Y.device).detach()
+
+        return torch.cat([torch.relu(box_min - Y), torch.relu(Y - box_max)], dim=1)
     
     def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(Y)
