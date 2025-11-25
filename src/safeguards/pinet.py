@@ -3,6 +3,8 @@ from torch import Tensor
 from jaxtyping import Float, jaxtyped
 from beartype import beartype
 from dataclasses import dataclass
+from typing import Optional, Tuple, Any
+import time
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -10,22 +12,30 @@ from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 class HyperplaneConstraint:
     A: Tensor  # (B, m, n)
     b: Tensor  # (B, m, 1)
+    
+    def __init__(self, A, b):
+        self.A = A
+        self.b = b
+        # pseudo-inverse treated as constant
+        self.Apinv = torch.linalg.pinv(A)
 
     def project(self, y: Tensor) -> Tensor:
         """
-        Projection onto { x | A x = b }.
-        Uses least-squares formula:
-            x_proj = x - A^T (A A^T)^{-1} (A x - b)
+        Projection onto { x | A x = b }:
+            x_proj = x − (A^+)(Ax − b)
         """
-        A, b = self.A, self.b
-        Ax = A @ y
-        res = Ax - b
-        # Solve (A A^T)^{-1} A res
-        lhs = A @ A.transpose(1, 2)  # (B, m, m)
-        solve = torch.linalg.solve(lhs, res)  # (B, m, 1)
-        correction = A.transpose(1, 2) @ solve
-        return y - correction
+        A_const = self.A.clone().detach()
+        b_const = self.b.clone().detach()
+        Apinv = self.Apinv.clone().detach()
 
+        # grad flows ONLY through y
+        correction = torch.bmm(A_const, y) - b_const
+        correction_proj = torch.bmm(Apinv, correction)
+
+        # this has requires_grad == True because y does
+        projected_x = y - correction_proj
+
+        return projected_x
 
 @dataclass
 class BoxConstraint:
@@ -33,13 +43,11 @@ class BoxConstraint:
     ub: Tensor  # (B, n, 1)
 
     def project(self, y: Tensor) -> Tensor:
-        return torch.max(torch.min(y, self.ub), self.lb)
-
+        return torch.clamp(y, self.lb, self.ub)
 
 # ---------------------------------------------------------------------------
 #                            PiNet Safeguard
 # ---------------------------------------------------------------------------
-
 class PinetSafeguard(Safeguard):
 
     @jaxtyped(typechecker=beartype)
@@ -48,6 +56,7 @@ class PinetSafeguard(Safeguard):
         env: SafeEnv,
         regularisation_coefficient: float,
         n_iter_admm: int,
+        n_iter_bwd: int,
         sigma: float = 1.0,
         omega: float = 1.7,
         **kwargs
@@ -56,6 +65,7 @@ class PinetSafeguard(Safeguard):
 
         self.regularisation_coefficient = regularisation_coefficient
         self.n_iter_admm = n_iter_admm
+        self.n_iter_bwd = n_iter_bwd
 
         self.sigma = sigma
         self.omega = omega
@@ -66,100 +76,24 @@ class PinetSafeguard(Safeguard):
         action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
     ) -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
 
-        B = self.batch_dim
-        D = self.action_dim
         action = action.unsqueeze(2)  # match (B, D, 1)
 
         # ----- Build Ax ≤ b -----
         A, b = self.env.compute_A_b()
-        m = A.shape[1]
 
-        # ----- Build equality + box constraints in lifted dim -----
-        hyperplane, box, scale = self._build_constraints(A, b)
+        # ADMM projection function with implicit backward that returns the final safe action.
+        y_safe = self._project_with_implicit(
+            action=action,  # (B, D, 1)
+            A=A,            # (B, m, D)
+            b=b            # (B, m)
+        )  # returns (B, D)
 
-        # ----- Elevate action into y = [x; Ax] -----
-        y_raw = self._elevate(action, A)
+        return y_safe  # already squeezed to (B, D)
 
-        # ----- Run ADMM -----
-        y = self._run_admm(y_raw, hyperplane, box)
+    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
 
-        # ----- Extract first D coords then unscale -----
-        y_proj = hyperplane.project(y)[:, :D, :]
-        y_proj = y_proj / scale[:, :D, :]  # undo Ruiz scaling
-
-        return y_proj.squeeze(2)
-
-    # ----------------------------------------------------------------------
-    # Build equality + box constraint
-    # ----------------------------------------------------------------------
-    def _build_constraints(self, A: Tensor, b: Tensor):
-        B, m, D = A.shape
-        total_dim = D + m
-
-        # Equality constraint: [0 0; A -I] y = 0
-        E = torch.zeros(B, D, D, device=A.device, dtype=A.dtype)
-        Z = torch.zeros(B, D, m, device=A.device, dtype=A.dtype)
-        negI = -torch.eye(m, device=A.device, dtype=A.dtype).expand(B, m, m)
-
-        top = torch.cat([E, Z], dim=2)
-        bottom = torch.cat([A, negI], dim=2)
-        Aeq = torch.cat([top, bottom], dim=1)
-
-        beq = torch.zeros(B, total_dim, 1, device=A.device, dtype=A.dtype)
-
-        # Ruiz scaling
-        _, _, d_c = self._ruiz(Aeq)
-        scale = d_c.transpose(1, 2)  # (B, total_dim, 1)
-
-        # Box constraint: x free, Ax ≤ b
-        lb = torch.full((B, total_dim, 1), -torch.inf, device=A.device, dtype=A.dtype)
-        ub = torch.cat([
-            torch.full((B, D, 1),  torch.inf, device=A.device, dtype=A.dtype),
-            b.unsqueeze(2)
-        ], dim=1)
-
-        return (
-            HyperplaneConstraint(Aeq, beq),
-            BoxConstraint(lb, ub),
-            scale
-        )
-
-    # ----------------------------------------------------------------------
-    # Elevation
-    # ----------------------------------------------------------------------
-    def _elevate(self, x: Tensor, A: Tensor) -> Tensor:
-        Ax = A @ x
-        return torch.cat([x, Ax], dim=1)
-
-    # ----------------------------------------------------------------------
-    # ADMM loop
-    # ----------------------------------------------------------------------
-    def _run_admm(self, y_raw, eq, box):
-        B, N, _ = y_raw.shape
-        sk = torch.zeros_like(y_raw)
-
-        sigma = torch.tensor(self.sigma, device=y_raw.device, dtype=y_raw.dtype)
-        omega = torch.tensor(self.omega, device=y_raw.device, dtype=y_raw.dtype)
-
-        D = self.action_dim
-
-        for _ in range(self.n_iter_admm):
-            zk = eq.project(sk)
-            reflect = 2 * zk - sk
-
-            scale = self.scale_t[:, :D, :]
-
-            first = (
-                2 * sigma * scale * y_raw[:, :D, :] + reflect[:, :D, :]
-            ) / (1 + 2 * sigma * scale**2)
-
-            second = reflect[:, D:, :]
-            to_box = torch.cat([first, second], dim=1)
-
-            tk = box.project(to_box)
-            sk = sk + omega * (tk - zk)
-
-        return sk
+        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
     # ----------------------------------------------------------------------
     # Ruiz scaling
@@ -173,12 +107,208 @@ class PinetSafeguard(Safeguard):
         M = A.clone()
 
         for _ in range(max_iter):
-            row_norm = torch.norm(M, p=1, dim=2, keepdim=True).clamp_min(eps)
-            d_r /= row_norm
-            M /= row_norm
+            row_norm = torch.norm(M, p=1, dim=2, keepdim=True).clamp_min(eps).detach()
+            M = M.clone() / row_norm
+            d_r = d_r.clone() / row_norm
 
-            col_norm = torch.norm(M, p=1, dim=1, keepdim=True).clamp_min(eps)
-            d_c /= col_norm
-            M /= col_norm
-
+            col_norm = torch.norm(M, p=1, dim=1, keepdim=True).clamp_min(eps).detach()
+            M = M.clone() / col_norm
+            d_c = d_c.clone() / col_norm
         return M, d_r, d_c
+
+    def _run_admm(self, sk, y_raw, scale):
+        sk_iter = sk.clone()
+        sigma = torch.tensor(self.sigma, device=y_raw.device, dtype=y_raw.dtype)
+        omega = torch.tensor(self.omega, device=y_raw.device, dtype=y_raw.dtype)
+        D = self.action_dim
+        
+        # Clone scale slice to ensure it's a distinct tensor
+        scale_sub = scale[:, :D, :].clone() 
+
+        for _ in range(self.n_iter_admm):
+            zk = self.eq.project(sk_iter)
+            reflect = 2*zk - sk_iter
+
+            # 1. Force clones on slices to break "view" dependencies in the graph
+            # 2. Pre-calculate denominator
+            
+            y_raw_D = y_raw[:, :D, :].clone()
+            reflect_D = reflect[:, :D, :].clone()
+            reflect_rest = reflect[:, D:, :].clone()
+            
+            scale_sq = scale_sub ** 2
+            denom = 1 + 2 * sigma * scale_sq
+            
+            # Use multiplication by reciprocal instead of division to avoid DivBackward issues
+            inv_denom = torch.reciprocal(denom) 
+            
+            numerator = (2 * sigma * scale_sub * y_raw_D + reflect_D)
+            first = numerator * inv_denom
+
+            to_box = torch.cat([first, reflect_rest], dim=1)
+            tk = self.box.project(to_box)
+
+            sk_iter = sk_iter.clone() + omega*(tk - zk)  # avoid in-place updates
+
+        return sk_iter
+
+    def _elevate(self, x: Tensor, A: Tensor) -> Tensor:
+        Ax = A @ x
+        return torch.cat([x, Ax], dim=1)
+
+    # ----------------------------------------------------------------------
+    # ADMM projection wrapped in a torch.autograd.Function with implicit backward
+    # ----------------------------------------------------------------------
+    def _project_with_implicit(
+        self,
+        action: Tensor,         # (B, D, 1)
+        A: Tensor,              # (B, m, D)
+        b: Tensor,              # (B, m)
+    ) -> Tensor:
+        """
+        Runs the ADMM projection and returns the safe action (B, D) with implicit backward.
+        """
+        # Build constraints
+        Bbatch, m, D = A.shape
+        total_dim = D + m
+
+        E = torch.zeros(Bbatch, D, D, device=A.device, dtype=A.dtype)
+        Z = torch.zeros(Bbatch, D, m, device=A.device, dtype=A.dtype)
+        negI = -torch.eye(m, device=A.device, dtype=A.dtype).unsqueeze(0).repeat(Bbatch, 1, 1)
+
+        top = torch.cat([E, Z], dim=2)
+        bottom = torch.cat([A, negI], dim=2)
+        Aeq = torch.cat([top, bottom], dim=1)  # (B, total_dim, total_dim?)
+
+        beq = torch.zeros(Bbatch, total_dim, 1, device=A.device, dtype=A.dtype)
+
+        # Ruiz scaling
+        _, _, d_c = self._ruiz(Aeq)
+        scale = d_c.transpose(1, 2).detach()
+
+        # Box constraint
+        lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device, dtype=A.dtype)
+        ub = torch.cat([
+            torch.full((Bbatch, D, 1),  torch.inf, device=A.device, dtype=A.dtype),
+            b.unsqueeze(2)
+        ], dim=1)
+
+        self.eq = HyperplaneConstraint(Aeq, beq)
+        self.box = BoxConstraint(lb, ub)
+
+        # Call custom autograd Function
+        y_safe = _ProjectImplicitFn.apply(
+            self._elevate(action, A),               # yraw
+            scale,                # d_c
+            float(self.sigma),
+            float(self.omega),
+            self._run_admm,       # step_iteration
+            self.eq.project,      # step_final
+            int(D),               # og_dim
+            int(total_dim),       # dim_lifted
+            self.n_iter_admm,     # n_iter
+            self.n_iter_bwd,      # n_iter_bwd
+            False,                # fpi
+        )
+
+        return y_safe
+
+
+# --------------------------
+# Autograd Function
+# --------------------------
+class _ProjectImplicitFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, yraw, d_c, sigma, omega,
+                step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
+
+        # Forward: run ADMM iterations without tracking gradients
+        sK = torch.zeros_like(yraw)
+        with torch.no_grad():
+            for _ in range(n_iter):
+                sK = step_iteration(sK, yraw, d_c)
+
+        y = step_final(sK)
+        y_scaled = y * d_c
+
+        # Save for backward
+        ctx.save_for_backward(sK, yraw, d_c)
+        ctx.step_iteration = step_iteration
+        ctx.step_final = step_final
+        ctx.n_iter_bwd = n_iter_bwd
+        ctx.dim_lifted = dim_lifted
+        ctx.fpi = fpi
+
+        return y_scaled[:, :og_dim].squeeze(2)
+
+    @staticmethod
+    def backward(ctx, grad_y):
+        sK, yraw, d_c = ctx.saved_tensors
+        step_iteration = ctx.step_iteration
+        step_final = ctx.step_final
+        n_iter_bwd = ctx.n_iter_bwd
+        dim_lifted = ctx.dim_lifted
+        fpi = ctx.fpi
+
+        batch, out_dim = grad_y.shape
+        grad_y = grad_y.unsqueeze(2).clone().detach()  # (B, D, 1)
+
+        # Scale gradient back
+        grad_z = grad_y * d_c[:, :out_dim, :]
+        y_for_vjp = torch.cat([
+            grad_z,
+            torch.zeros(batch, dim_lifted - out_dim, 1, device=grad_y.device)
+        ], dim=1)
+
+        # --- Recompute sK and yraw for backward graph ---
+        sK_bwd = sK.clone().detach().requires_grad_(True)
+        yraw_bwd = yraw.clone().detach().requires_grad_(True)
+
+        # Gradient through final projection
+        with torch.enable_grad():
+            y_final = step_final(sK_bwd)
+
+        vjp = torch.autograd.grad(
+            outputs=y_final,
+            inputs=sK_bwd,
+            grad_outputs=y_for_vjp,
+            retain_graph=False,
+            allow_unused=False
+        )[0]
+
+        # Implicit backward solve: (I - J_iteration)^T g = vjp       
+        def iteration_vjp(v):
+            with torch.enable_grad():
+                admm_plus = step_iteration(sK_bwd, yraw_bwd, d_c.clone())  # recompute fresh
+            return torch.autograd.grad(
+                outputs=admm_plus,
+                inputs=sK_bwd,
+                grad_outputs=v,
+                retain_graph=False,
+                allow_unused=False
+            )[0]
+
+        if fpi:
+            g = torch.zeros_like(vjp)
+            for _ in range(n_iter_bwd):
+                g = iteration_vjp(g).clone() + vjp
+        else:
+            g = vjp.clone()
+            for _ in range(n_iter_bwd):
+                g = g + 0.1 * (vjp - (g - iteration_vjp(g).clone()))
+
+        # Gradient w.r.t input yraw
+        with torch.enable_grad():
+            admm_plus_last = step_iteration(sK_bwd, yraw_bwd, d_c.clone())
+        
+        grad_yraw = torch.autograd.grad(
+            outputs=admm_plus_last,
+            inputs=yraw_bwd,
+            grad_outputs=g,
+            retain_graph=False,
+            allow_unused=False
+        )[0]
+
+        print('Complete PiNet backward pass.')
+
+        return grad_yraw, None, None, None, None, None, None, None, None, None, None

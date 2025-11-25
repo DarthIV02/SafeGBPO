@@ -11,11 +11,6 @@ from matplotlib.patches import Polygon
 from scipy.optimize import linprog
 
 from sets.interface.convex_set import ConvexSet
-import types
-import sys
-sys.modules['cdd'] = types.ModuleType("cdd")
-
-from pypoman import compute_polytope_vertices
 from scipy.spatial import HalfspaceIntersection
 
 class HPolytope(ConvexSet):

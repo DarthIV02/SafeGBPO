@@ -128,6 +128,9 @@ class SHAC(LearningAlgorithm):
         Returns:
             The policy loss
         """
+
+        torch.autograd.set_detect_anomaly(True)
+        
         exponent = torch.arange(self.len_trajectories + 2).view(-1, 1).repeat(1, self.env.num_envs)
 
         for end, env in self.buffer.terminals.nonzero():
@@ -153,9 +156,12 @@ class SHAC(LearningAlgorithm):
         if self.buffer.store_safe_actions:
             # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
             #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
-            policy_loss += self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            safe_guard_loss = self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            print(safe_guard_loss)
+            policy_loss = policy_loss + safe_guard_loss
 
         policy_loss.backward()
+        
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)
         self.policy_optim.step()
 
