@@ -59,6 +59,7 @@ class PinetSafeguard(Safeguard):
         n_iter_bwd: int,
         sigma: float = 1.0,
         omega: float = 1.7,
+        bwd_method: str = "implicit",
         **kwargs
     ):
         super().__init__(env)
@@ -69,6 +70,7 @@ class PinetSafeguard(Safeguard):
 
         self.sigma = sigma
         self.omega = omega
+        self.bwd_method = bwd_method
 
     @jaxtyped(typechecker=beartype)
     def safeguard(
@@ -107,14 +109,14 @@ class PinetSafeguard(Safeguard):
         M = A.clone()
 
         for _ in range(max_iter):
-            row_norm = torch.norm(M, p=1, dim=2, keepdim=True).clamp_min(eps).detach()
-            M = M.clone() / row_norm
-            d_r = d_r.clone() / row_norm
+            row_norm = torch.norm(M, p=1, dim=2, keepdim=True).clamp_min(eps)
+            M = M / row_norm
+            d_r = d_r / row_norm
 
-            col_norm = torch.norm(M, p=1, dim=1, keepdim=True).clamp_min(eps).detach()
-            M = M.clone() / col_norm
-            d_c = d_c.clone() / col_norm
-        return M, d_r, d_c
+            col_norm = torch.norm(M, p=1, dim=1, keepdim=True).clamp_min(eps)
+            M = M / col_norm
+            d_c = d_c / col_norm
+        return M.detach(), d_r.detach(), d_c.detach()
 
     def _run_admm(self, sk, y_raw, scale):
         sk_iter = sk.clone()
@@ -153,7 +155,7 @@ class PinetSafeguard(Safeguard):
         return sk_iter
 
     def _elevate(self, x: Tensor, A: Tensor) -> Tensor:
-        Ax = A @ x
+        Ax = torch.matmul(A, x)
         return torch.cat([x, Ax], dim=1)
 
     # ----------------------------------------------------------------------
@@ -184,7 +186,7 @@ class PinetSafeguard(Safeguard):
 
         # Ruiz scaling
         _, _, d_c = self._ruiz(Aeq)
-        scale = d_c.transpose(1, 2).detach()
+        scale = d_c.transpose(1, 2)
 
         # Box constraint
         lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device, dtype=A.dtype)
@@ -198,7 +200,7 @@ class PinetSafeguard(Safeguard):
 
         # Call custom autograd Function
         y_safe = _ProjectImplicitFn.apply(
-            self._elevate(action, A),               # yraw
+            self._elevate(action, A.detach()),               # yraw
             scale,                # d_c
             float(self.sigma),
             float(self.omega),
@@ -228,11 +230,12 @@ class _ProjectImplicitFn(torch.autograd.Function):
             for _ in range(n_iter):
                 sK = step_iteration(sK, yraw, d_c)
 
-        y = step_final(sK)
+        y = step_final(sK).detach()
         y_scaled = y * d_c
 
         # Save for backward
-        ctx.save_for_backward(sK, yraw, d_c)
+
+        ctx.save_for_backward(sK.clone().detach(), yraw.clone().detach(), d_c.clone().detach())
         ctx.step_iteration = step_iteration
         ctx.step_final = step_final
         ctx.n_iter_bwd = n_iter_bwd
@@ -308,7 +311,5 @@ class _ProjectImplicitFn(torch.autograd.Function):
             retain_graph=False,
             allow_unused=False
         )[0]
-
-        print('Complete PiNet backward pass.')
 
         return grad_yraw, None, None, None, None, None, None, None, None, None, None
