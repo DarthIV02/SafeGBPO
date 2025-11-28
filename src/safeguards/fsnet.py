@@ -57,6 +57,7 @@ class FSNetSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
+        self.data.setup_resid(action)
         self.pre_eq_violation = self.data.eq_resid(None, action).square().sum(dim=1)
         self.pre_ineq_violation = self.data.ineq_resid(None, action).square().sum(dim=1)
         
@@ -98,30 +99,29 @@ class FSNetSafeguard(Safeguard):
             loss = self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action) 
         return loss
     
+    def safeguard_metrics(self):
+        return super().safeguard_metrics()
 
 class PolytopeData:
     def __init__(self,env):
         self.env = env
+
+    def setup_resid(self, action):
+        self.A, self.b = self.env.compute_A_b()
+        self.A = self.A.to(dtype=action.dtype, device=action.device).detach()
+        self.b = self.b.to(dtype=action.dtype, device=action.device).detach().unsqueeze(2)
         
     def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        A, b = self.env.compute_A_b()
-        # Ensure A and b are torch tensors
-        if not isinstance(A, torch.Tensor):
-            A = torch.as_tensor(A, dtype=Y.dtype, device=Y.device)
-        if not isinstance(b, torch.Tensor):
-            b = torch.as_tensor(b, dtype=Y.dtype, device=Y.device)
-        # ensure no gradient flows through A and b
-        A = A.detach()
-        b = b.detach()
-        return torch.relu(A @ Y.unsqueeze(2) - b.unsqueeze(2))
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
+    
     def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(Y)
     
 class BoxData: #TODO: this is really slow for some reason. i guess its because of double the constraints
     def __init__(self,env):
         self.env = env
-        
-    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+
+    def setup_resid(self, action):
         box = self.env.safe_action_set().box()
         center = box.center
         gen = box.generator
@@ -130,11 +130,13 @@ class BoxData: #TODO: this is really slow for some reason. i guess its because o
             half_extents = gen.abs().sum(dim=2)  # (batch_box, dim)
         else:
             half_extents = gen.abs()
+        
+        self.box_min = (center - half_extents).to(dtype=action.dtype, device=action.device).detach()
+        self.box_max = (center + half_extents).to(dtype=action.dtype, device=action.device).detach()
+        
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
 
-        box_min = (center - half_extents).to(dtype=Y.dtype, device=Y.device).detach()
-        box_max = (center + half_extents).to(dtype=Y.dtype, device=Y.device).detach()
-
-        return torch.cat([torch.relu(box_min - Y), torch.relu(Y - box_max)], dim=1)
+        return torch.cat([torch.relu(self.box_min - Y), torch.relu(Y - self.box_max)], dim=1)
     
     def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
         return torch.zeros_like(Y)
