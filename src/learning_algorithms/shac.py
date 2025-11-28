@@ -90,6 +90,7 @@ class SHAC(LearningAlgorithm):
         policy_loss = self.update_policy()
         value_loss = self.update_value_function()
         self.update_target_value_function()
+        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -114,7 +115,8 @@ class SHAC(LearningAlgorithm):
                 terminal = torch.ones_like(terminal)
 
             safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
-            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action)
+            safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
+            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             t += 1
             average_reward += reward.sum().item()
         return average_reward / self.env.num_envs / self.len_trajectories

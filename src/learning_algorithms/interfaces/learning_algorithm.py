@@ -88,9 +88,10 @@ class LearningAlgorithm(ABC):
             for param_group in self.value_function_optim.param_groups:
                 param_group["lr"] += vf_lr_update
 
+            additional_metrics = self._learn_episode_additional_metrics()
             with torch.no_grad():
                 if logger:
-                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes)
+                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
@@ -105,3 +106,14 @@ class LearningAlgorithm(ABC):
             Average reward, policy loss, and value loss for the episode.
         """
         pass
+
+    @jaxtyped(typechecker=beartype)
+    def _learn_episode_additional_metrics(self) -> dict[str, float]:
+        """
+        Get metrics for the learning algorithm.
+
+        Returns:
+            A dictionary of metrics.
+        """
+        return dict(getattr(self, '_last_episode_safeguard_metrics', {}))
+    

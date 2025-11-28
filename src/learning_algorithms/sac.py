@@ -104,6 +104,7 @@ class SAC(LearningAlgorithm):
             if eps % self.target_frequency == 0:
                 self.update_target()
 
+        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -127,7 +128,8 @@ class SAC(LearningAlgorithm):
         terminal = terminated | truncated
 
         safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
-        self.buffer.add(observation, reward, terminal, action=action, safe_action=safe_action)
+        safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
+        self.buffer.add(observation, reward, terminal, action=action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
 
         return reward.mean().item()
 

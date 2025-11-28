@@ -86,6 +86,9 @@ class FSNetSafeguard(Safeguard):
                     scale=self.config_method['scale'],
                 )
 
+        self.post_eq_violation = self.data.eq_resid(None, safe_action).square().sum(dim=1)
+        self.post_ineq_violation = self.data.ineq_resid(None, safe_action).square().sum(dim=1)
+
         return safe_action
 
     def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
@@ -100,7 +103,12 @@ class FSNetSafeguard(Safeguard):
         return loss
     
     def safeguard_metrics(self):
-        return super().safeguard_metrics()
+        return  {
+            "pre_eq_violation": self.pre_eq_violation.mean().item(),
+            "pre_ineq_violation": self.pre_ineq_violation.mean().item(),
+            "post_eq_violation": self.post_eq_violation.mean().item(),
+            "post_ineq_violation": self.post_ineq_violation.mean().item(),
+        }
 
 class PolytopeData:
     def __init__(self,env):

@@ -128,6 +128,17 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
+    @abstractmethod
+    def safeguard_metrics(self) -> dict[str, Any]:
+        """
+        Get metrics related to the safeguard.
+
+        Returns:
+            A dictionary of metrics.
+        """
+        return {}
+
+    @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \
             -> tuple[cp.Expression | np.ndarray, np.ndarray, list[cp.Parameter]]:
         """
