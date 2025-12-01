@@ -5,6 +5,7 @@ from beartype import beartype
 from dataclasses import dataclass
 from typing import Optional, Tuple, Any
 import time
+import os
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -14,23 +15,23 @@ class HyperplaneConstraint:
     b: Tensor  # (B, m, 1)
     
     def __init__(self, A, b):
-        self.A = A
-        self.b = b
-        # pseudo-inverse treated as constant
-        self.Apinv = torch.linalg.pinv(A)
+        # store constants without gradients
+        self.A = A.detach()
+        self.b = b.detach()
+
+        # pseudo-inverse as constant
+        with torch.no_grad():
+            self.Apinv = torch.linalg.pinv(self.A).detach()
 
     def project(self, y: Tensor) -> Tensor:
         """
         Projection onto { x | A x = b }:
             x_proj = x − (A^+)(Ax − b)
         """
-        A_const = self.A.clone().detach()
-        b_const = self.b.clone().detach()
-        Apinv = self.Apinv.clone().detach()
 
         # grad flows ONLY through y
-        correction = torch.bmm(A_const, y) - b_const
-        correction_proj = torch.bmm(Apinv, correction)
+        correction = torch.bmm(self.A, y) - self.b
+        correction_proj = torch.bmm(self.Apinv, correction)
 
         # this has requires_grad == True because y does
         projected_x = y - correction_proj
@@ -42,8 +43,32 @@ class BoxConstraint:
     lb: Tensor  # (B, n, 1)
     ub: Tensor  # (B, n, 1)
 
+    def __init__(self, lb, ub):
+        self.lb = lb.detach()
+        self.ub = ub.detach()
+
     def project(self, y: Tensor) -> Tensor:
         return torch.clamp(y, self.lb, self.ub)
+
+def _save_log(stage: str, data: dict, logfile_base: str):
+    """
+    Save dictionary of tensors to a .pt file.
+    Stage is either 'forward' or 'backward'.
+    Creates two separate files:
+        <logfile_base>_forward.pt
+        <logfile_base>_backward.pt
+    """
+    base = logfile_base
+    if base is None:
+        return
+    
+    # remove .pt if user put it in the base name
+    if base.endswith(".pt"):
+        base = base[:-3]
+
+    # choose file based on stage
+    outfile = f"{base}_{stage}.pt"
+    torch.save(data, outfile)
 
 # ---------------------------------------------------------------------------
 #                            PiNet Safeguard
@@ -60,17 +85,20 @@ class PinetSafeguard(Safeguard):
         sigma: float = 1.0,
         omega: float = 1.7,
         bwd_method: str = "implicit",
+        debug: bool = False,
         **kwargs
     ):
         super().__init__(env)
 
         self.regularisation_coefficient = regularisation_coefficient
+        self.debug = debug
         self.n_iter_admm = n_iter_admm
         self.n_iter_bwd = n_iter_bwd
 
         self.sigma = sigma
         self.omega = omega
         self.bwd_method = bwd_method
+        self.log_file = f"logs/{self.bwd_method}_admm_iter_{self.n_iter_admm}_bwd_{self.n_iter_bwd}"
 
     @jaxtyped(typechecker=beartype)
     def safeguard(
@@ -155,8 +183,9 @@ class PinetSafeguard(Safeguard):
         return sk_iter
 
     def _elevate(self, x: Tensor, A: Tensor) -> Tensor:
-        Ax = torch.matmul(A, x)
-        return torch.cat([x, Ax], dim=1)
+        Ax = torch.bmm(A, x)
+        elevated = torch.cat([x, Ax], dim=1)
+        return elevated
 
     # ----------------------------------------------------------------------
     # ADMM projection wrapped in a torch.autograd.Function with implicit backward
@@ -199,29 +228,95 @@ class PinetSafeguard(Safeguard):
         self.box = BoxConstraint(lb, ub)
 
         # Call custom autograd Function
-        y_safe = _ProjectImplicitFn.apply(
-            self._elevate(action, A.detach()),               # yraw
-            scale,                # d_c
-            float(self.sigma),
-            float(self.omega),
-            self._run_admm,       # step_iteration
-            self.eq.project,      # step_final
-            int(D),               # og_dim
-            int(total_dim),       # dim_lifted
-            self.n_iter_admm,     # n_iter
-            self.n_iter_bwd,      # n_iter_bwd
-            False,                # fpi
-        )
+        if self.bwd_method == "implicit": 
+
+            _ProjectImplicitFn.debug = self.debug
+            _ProjectImplicitFn.logfile = self.log_file
+
+            y_safe = _ProjectImplicitFn.apply(
+                self._elevate(action, A.detach()),               # yraw
+                scale,                # d_c
+                self._run_admm,       # step_iteration
+                self.eq.project,      # step_final
+                int(D),               # og_dim
+                int(total_dim),       # dim_lifted
+                self.n_iter_admm,     # n_iter
+                self.n_iter_bwd,      # n_iter_bwd
+                False,                # fpi
+            )
+        
+        elif self.bwd_method == "unroll":
+            y_safe = self.project_complete(
+                self._elevate(action, A.detach()),               # yraw
+                scale,                # d_c
+                self._run_admm,       # step_iteration
+                self.eq.project,      # step_final
+                int(D),               # og_dim
+                self.n_iter_admm,     # n_iter
+            )
+        
+        else:
+            raise ValueError(f"Unknown bwd_method: {self.bwd_method}")
 
         return y_safe
 
+    def project_complete(self, yraw, d_c,
+                step_iteration, step_final, og_dim, n_iter):
+
+        # Forward: run ADMM iterations tracking all the gradients
+        with torch.enable_grad():
+            sK = torch.zeros_like(yraw, requires_grad=True)
+
+            for _ in range(n_iter):
+                sK = step_iteration(sK, yraw, d_c)
+
+            y = step_final(sK)
+
+            y_scaled = y * d_c
+
+            result = y_scaled[:, :og_dim].squeeze(2)
+
+        if self.debug:
+            # storage dict for backward gradients
+            self._unroll_backward_grads = {}
+
+            def save_grad(name):
+                return lambda grad: self._unroll_backward_grads.__setitem__(name, grad.detach().cpu())
+
+            # register hook on y_scaled BEFORE returning
+            if not y_scaled.requires_grad:
+                raise RuntimeError(f"y_scaled does not require grad: {y_scaled!r}")
+            y_scaled.retain_grad()
+            y_scaled.register_hook(save_grad("grad_y_scaled"))
+
+            # also store forward values
+            _save_log("forward", {
+                "yraw": yraw.detach().cpu(),
+                "d_c": d_c.detach().cpu(),
+                "sK_final": sK.detach().cpu(),
+                "y_final": y.detach().cpu(),
+                "y_scaled": y_scaled.detach().cpu(),
+            }, self.log_file)
+
+            def save_final_grad(grad):
+                _save_log("backward", {
+                    "grad_y_scaled": self._unroll_backward_grads.get("grad_y_scaled", None),
+                    "grad_output": grad.detach().cpu(),
+                }, self.log_file)
+            
+            result.register_hook(save_final_grad)
+
+        return result
 
 # --------------------------
 # Autograd Function
 # --------------------------
 class _ProjectImplicitFn(torch.autograd.Function):
+    debug = False
+    logfile = None
+
     @staticmethod
-    def forward(ctx, yraw, d_c, sigma, omega,
+    def forward(ctx, yraw, d_c,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
 
         # Forward: run ADMM iterations without tracking gradients
@@ -241,6 +336,15 @@ class _ProjectImplicitFn(torch.autograd.Function):
         ctx.n_iter_bwd = n_iter_bwd
         ctx.dim_lifted = dim_lifted
         ctx.fpi = fpi
+
+        if _ProjectImplicitFn.debug:
+            _save_log("forward", {
+                "yraw": yraw.detach().cpu(),
+                "d_c": d_c.detach().cpu(),
+                "sK_final": sK.detach().cpu(),
+                "y_final": y.detach().cpu(),
+                "y_scaled": y_scaled.detach().cpu(),
+            }, _ProjectImplicitFn.logfile)
 
         return y_scaled[:, :og_dim].squeeze(2)
 
@@ -311,5 +415,14 @@ class _ProjectImplicitFn(torch.autograd.Function):
             retain_graph=False,
             allow_unused=False
         )[0]
+
+        if _ProjectImplicitFn.debug:
+            _save_log("backward", {
+                "grad_y_in": grad_y.detach().cpu(),
+                "grad_z": grad_z.detach().cpu(),
+                "vjp_projection": vjp.detach().cpu(),
+                "implicit_solution_g": g.detach().cpu(),
+                "grad_yraw": None if grad_yraw is None else grad_yraw.detach().cpu(),
+            }, _ProjectImplicitFn.logfile)
 
         return grad_yraw, None, None, None, None, None, None, None, None, None, None

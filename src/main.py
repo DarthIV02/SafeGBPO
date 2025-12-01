@@ -144,9 +144,16 @@ if __name__ == "__main__":
     # this is for testing purposes only
     experiment_queue = [
         Experiment(num_runs=1,
+            learning_algorithm=SHACConfig(),
+            env=NavigateSeekerConfig(),
+            safeguard=PinetConfig(debug=True, bwd_method="unroll"),
+            interactions=60_000,
+            eval_freq=5_000,
+            fast_eval=False),
+        Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
-                   safeguard=PinetConfig(n_iter_admm=10, n_iter_bwd=10),
+                   safeguard=PinetConfig(debug=True),
                    interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False)
