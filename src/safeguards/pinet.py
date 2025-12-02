@@ -125,6 +125,10 @@ class PinetSafeguard(Safeguard):
 
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
+    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
+    
     # ----------------------------------------------------------------------
     # Ruiz scaling
     # ----------------------------------------------------------------------

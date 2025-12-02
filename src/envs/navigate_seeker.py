@@ -611,8 +611,8 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self, agent_position: Float[Tensor, "{self.action_dim}"], obstacle_position: Float[Tensor, "{self.action_dim}"], obstacle_radius: float
     ):
         a = obstacle_position - agent_position
-        a /= torch.linalg.norm(a)
+        a = a / torch.linalg.norm(a)
         b = torch.linalg.norm(obstacle_position - agent_position)
-        b -= obstacle_radius 
+        b = b - obstacle_radius 
         #b -= self.env_config.noise
         return b, a

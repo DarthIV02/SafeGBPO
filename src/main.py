@@ -96,7 +96,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=None,
-                   interactions=15_000,
+                   interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -104,23 +104,15 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
-                   interactions=15_000,
+                   interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=True),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=False),
-                   interactions=15_000,
+                   safeguard=RayMaskConfig(zonotopic_approximation=False, polytopic_approximation=True),
+                   interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),
         
@@ -128,7 +120,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=FSNetConfig(),
-                   interactions=15_000,
+                   interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -136,7 +128,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=PinetConfig(),
-                   interactions=15_000,
+                   interactions=60_000,
                    eval_freq=5_000,
                    fast_eval=False),
     ]

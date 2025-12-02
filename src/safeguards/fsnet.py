@@ -22,8 +22,8 @@ class FSNetSafeguard(Safeguard):
                  ineq_pen_coefficient: float,
                  val_tol: float,
                  memory_size: int,
-                 maxmax_iter_iter: int,
-                 max_diff_iter,
+                 max_iter: int,
+                 max_diff_iter:int,
                  scale : float,
                  **kwargs):
         Safeguard.__init__(self, env)
@@ -36,10 +36,14 @@ class FSNetSafeguard(Safeguard):
         self.config_method = {
             'val_tol': val_tol,
             'memory_size': memory_size,
-            'max_iter': maxmax_iter_iter,
+            'max_iter': max_iter,
             'max_diff_iter': max_diff_iter,
             'scale': scale,
         }
+        if self.env.polytope:
+            self.data = PolytopeData(env)
+        else:
+            self.data = BoxData(env)
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -53,21 +57,37 @@ class FSNetSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
-        #TODO: define self.data
+        self.data.setup_resid(action)
+        self.pre_eq_violation = self.data.eq_resid(None, action).square().sum(dim=1)
+        self.pre_ineq_violation = self.data.ineq_resid(None, action).square().sum(dim=1)
+        
+        # Use non-differentiable solver during evaluation (no grad mode),
+        # hybrid solver during training (with grad)
+        if torch.is_grad_enabled():
+            safe_action = hybrid_lbfgs_solve(
+                None,
+                action,
+                self.data,
+                val_tol=self.config_method['val_tol'],
+                memory=self.config_method['memory_size'],
+                max_iter=self.config_method['max_iter'],
+                max_diff_iter=self.config_method['max_diff_iter'],
+                scale=self.config_method['scale'],
+            )
+        else:
+            with torch.enable_grad():
+                safe_action = nondiff_lbfgs_solve(
+                    None,
+                    action,
+                    self.data,
+                    val_tol=self.config_method['val_tol'],
+                    memory=self.config_method['memory_size'],
+                    max_iter=self.config_method['max_iter'],
+                    scale=self.config_method['scale'],
+                )
 
-        self.pre_eq_violation = self.data.eq_resid(self.observations(), action).square().sum(dim=1)
-        self.pre_ineq_violation = self.data.ineq_resid(self.observations(), action).square().sum(dim=1)
-
-        safe_action = hybrid_lbfgs_solve(
-            self.observations(),
-            action,
-            self.data,
-            val_tol=self.config_method['val_tol'],
-            memory=self.config_method['memory_size'],
-            max_iter=self.config_method['max_iter'],
-            max_diff_iter=self.config_method['max_diff_iter'],
-            scale=self.config_method['scale'],
-        )
+        self.post_eq_violation = self.data.eq_resid(None, safe_action).square().sum(dim=1)
+        self.post_ineq_violation = self.data.ineq_resid(None, safe_action).square().sum(dim=1)
 
         return safe_action
 
@@ -82,36 +102,56 @@ class FSNetSafeguard(Safeguard):
             loss = self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action) 
         return loss
     
-    # def _fsnet_loss(self, X_batch: torch.Tensor, Y_pred_scaled: torch.Tensor, metrics: Dict) -> Tuple[torch.Tensor, Dict[str, float]]:
-    #     """Computes the FSNet loss."""
-    #     pre_eq_violation = self.data.eq_resid(X_batch, Y_pred_scaled).square().sum(dim=1)
-    #     pre_ineq_violation = self.data.ineq_resid(X_batch, Y_pred_scaled).square().sum(dim=1)
+    def safeguard_metrics(self):
+        return  {
+            "pre_eq_violation": self.pre_eq_violation.mean().item(),
+            "pre_ineq_violation": self.pre_ineq_violation.mean().item(),
+            "post_eq_violation": self.post_eq_violation.mean().item(),
+            "post_ineq_violation": self.post_ineq_violation.mean().item(),
+        }
 
-    #     Y_final = hybrid_lbfgs_solve(
-    #         X_batch,
-    #         Y_pred_scaled,
-    #         self.data,
-    #         val_tol=self.config_method['val_tol'],
-    #         memory=self.config_method['memory_size'],
-    #         max_iter=self.config_method['max_iter'],
-    #         max_diff_iter=self.config_method['max_diff_iter'],
-    #         scale=self.config_method['scale'],
-    #     )
-    #     obj = self.data.obj_fn(Y_final)
+class PolytopeData:
+    def __init__(self,env):
+        self.env = env
 
-    #     distance = torch.norm(Y_final - Y_pred_scaled, dim=1).square().mean()
-
-    #     if pre_eq_violation.mean() >= 1e3 or pre_ineq_violation.mean() >= 1e3:
-    #         loss = self.config_method['obj_weight'] * obj + \
-    #                self.config_method['dist_weight'] * distance +\
-    #                self.config_method['eq_pen_weight'] * pre_eq_violation + \
-    #                self.config_method['ineq_pen_weight'] * pre_ineq_violation
-    #     else:
-    #         loss = self.config_method['obj_weight'] * obj + \
-    #                self.config_method['dist_weight'] * distance
-    #     return loss
+    def setup_resid(self, action):
+        self.A, self.b = self.env.compute_A_b()
+        self.A = self.A.to(dtype=action.dtype, device=action.device).detach()
+        self.b = self.b.to(dtype=action.dtype, device=action.device).detach().unsqueeze(2)
+        
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
     
+    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+    
+class BoxData: #TODO: this is really slow for some reason. i guess its because of double the constraints
+    def __init__(self,env):
+        self.env = env
 
+    def setup_resid(self, action):
+        box = self.env.safe_action_set().box()
+        center = box.center
+        gen = box.generator
+
+        if gen.dim() == 3:
+            half_extents = gen.abs().sum(dim=2)  # (batch_box, dim)
+        else:
+            half_extents = gen.abs()
+        
+        self.box_min = (center - half_extents).to(dtype=action.dtype, device=action.device).detach()
+        self.box_max = (center + half_extents).to(dtype=action.dtype, device=action.device).detach()
+        
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+
+        return torch.cat([torch.relu(self.box_min - Y), torch.relu(Y - self.box_max)], dim=1)
+    
+    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+
+# ----------------------------------------------------------------------
+#  Code from FSNet/utils/lbfgs.py
+# ----------------------------------------------------------------------
 
 # Differentiable and nondifferentiable L-BFGS solver
 
@@ -571,3 +611,4 @@ def hybrid_lbfgs_solve(
     
     # Return with gradient connection only to differentiable phase
     return y + (y_nondiff - y).detach()
+  

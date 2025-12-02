@@ -25,14 +25,14 @@ class RayMaskConfig(SafeguardConfig):
 
 @dataclass
 class FSNetConfig(SafeguardConfig): #TODO: fill default valueS
-    regularisation_coefficient: float = 0.0
-    eq_pen_coefficient: float = 1.0
-    ineq_pen_coefficient: float = 1.0
-    # val_tol: float = 1e-6,
-    # memory_size: int = 10,
-    # maxmax_iter_iter: int = 50,
-    # max_diff_iter = 10,
-    # scale : float = 1.0,
+    regularisation_coefficient: float = 0.1
+    eq_pen_coefficient: float = 0.025
+    ineq_pen_coefficient: float = 0.025
+    val_tol: float = 1e-6
+    memory_size: int = 20
+    max_iter: int = 50
+    max_diff_iter: int = 10
+    scale : float = 1.0
 
 @dataclass
 class PinetConfig(SafeguardConfig):
