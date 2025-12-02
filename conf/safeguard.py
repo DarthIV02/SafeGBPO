@@ -36,6 +36,6 @@ class FSNetConfig(SafeguardConfig): #TODO: fill default valueS
 
 @dataclass
 class PinetConfig(SafeguardConfig):
-    regularisation_coefficient: float = 0.0
-
-
+    regularisation_coefficient: float = 0.1
+    n_iter_admm: int = 10
+    n_iter_bwd: int = 10

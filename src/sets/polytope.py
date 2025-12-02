@@ -11,11 +11,6 @@ from matplotlib.patches import Polygon
 from scipy.optimize import linprog
 
 from sets.interface.convex_set import ConvexSet
-import types
-import sys
-sys.modules['cdd'] = types.ModuleType("cdd")
-
-from pypoman import compute_polytope_vertices
 from scipy.spatial import HalfspaceIntersection
 
 class HPolytope(ConvexSet):
@@ -87,70 +82,10 @@ class HPolytope(ConvexSet):
         """Alias for contains_point()."""
         return self.contains_point(points)
 
-    """def vertices(self) -> list[Float[Tensor, "num_vert dim"]]:
-        # Compute vertices for each polytope using pypoman.
-        import pypoman
-        verts_all = []
-        for i in range(self.batch_dim):
-            A_np = self.A[i].detach().cpu().numpy()
-            b_np = self.b[i].detach().cpu().numpy()
-            verts_np = np.array(pypoman.compute_polytope_vertices(A_np, b_np))
-            verts_all.append(torch.tensor(verts_np, dtype=self.A.dtype, device=self.A.device))
-        return verts_all"""
-
-    # Changed for now to boxes only 
-    ## CHECK: might crash for 0 padding...
-
-    """def vertices(self) -> tuple[Tensor, Tensor]:"""
-    """Compute vertices for each polytope as a padded tensor.
-
-    Returns:
-        verts_tensor: (batch, max_num_vert, dim) tensor of vertices (padded with zeros)
-        mask: (batch, max_num_vert) boolean tensor, True if that row is a valid vertex
-    """
-    """verts_list = []
-    max_vertices = 0
-
-    for i in range(self.batch_dim):
-        A_i = self.A[i]   # (num_constraints, dim)
-        b_i = self.b[i]   # (num_constraints,)
-
-        dim = A_i.shape[1]
-        lower = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
-        upper = torch.zeros(dim, device=A_i.device, dtype=A_i.dtype)
-
-        for j in range(dim):
-            mask_pos = (A_i[:, j] > 0)
-            mask_neg = (A_i[:, j] < 0)
-            if mask_pos.any():
-                upper[j] = b_i[mask_pos].min()
-            if mask_neg.any():
-                lower[j] = -b_i[mask_neg].min()
-
-        # Cartesian product for corners
-        from itertools import product
-        corners = torch.tensor(list(product(*zip(lower.tolist(), upper.tolist()))),
-                            device=A_i.device, dtype=A_i.dtype)  # (num_vert, dim)
-        verts_list.append(corners)
-        max_vertices = max(max_vertices, corners.shape[0])
-
-    # Pad to max_vertices
-    batch = self.batch_dim
-    dim = self.A.shape[2]
-    verts_tensor = torch.zeros(batch, max_vertices, dim, device=self.A.device, dtype=self.A.dtype)
-    mask = torch.zeros(batch, max_vertices, dtype=torch.bool, device=self.A.device)
-
-    for i, corners in enumerate(verts_list):
-        n = corners.shape[0]
-        verts_tensor[i, :n] = corners
-        mask[i, :n] = 1
-
-    return verts_tensor, mask"""
-
     def vertices(self) -> np.array:
         # obtain minimal representation
-        A = np.asarray(self.A[0])
-        b = np.asarray(self.b[0])
+        A = np.asarray(self.A[0].cpu())
+        b = np.asarray(self.b[0].cpu())
 
         # ---- Step 1: Find an interior point by maximizing slack ----
         n = self.dim

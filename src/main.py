@@ -10,9 +10,8 @@ from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cpu") # "cuda" if torch.cuda.is_available() else
+torch.set_default_device("cuda:1" if torch.cuda.is_available() else "cpu") # 
 torch.set_default_dtype(torch.float64)
-
 
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
     if trial is not None:
@@ -137,12 +136,19 @@ if __name__ == "__main__":
     # this is for testing purposes only
     experiment_queue = [
         Experiment(num_runs=1,
+            learning_algorithm=SHACConfig(),
+            env=NavigateSeekerConfig(),
+            safeguard=PinetConfig(debug=True, bwd_method="unroll"),
+            interactions=60_000,
+            eval_freq=5_000,
+            fast_eval=False),
+        Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(),
+                   safeguard=PinetConfig(debug=True),
                    interactions=60_000,
                    eval_freq=5_000,
-                   fast_eval=False),
+                   fast_eval=False)
     ]
 
     for i, experiment in enumerate(experiment_queue):
