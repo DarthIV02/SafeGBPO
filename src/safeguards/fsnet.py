@@ -43,7 +43,7 @@ class FSNetSafeguard(Safeguard):
         if self.env.polytope:
             self.data = PolytopeData(env)
         else:
-            self.data = BoxData(env)
+            self.data = ZonotopeData(env)
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -58,15 +58,16 @@ class FSNetSafeguard(Safeguard):
             The safeguarded action.
         """
         self.data.setup_resid(action)
-        self.pre_eq_violation = self.data.eq_resid(None, action).square().sum(dim=1)
-        self.pre_ineq_violation = self.data.ineq_resid(None, action).square().sum(dim=1)
+        processed_action = self.data.pre_process_action(action)
+        self.pre_eq_violation = self.data.eq_resid(None, processed_action).square().sum(dim=1)
+        self.pre_ineq_violation = self.data.ineq_resid(None, processed_action).square().sum(dim=1)
         
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad)
         if torch.is_grad_enabled():
             safe_action = hybrid_lbfgs_solve(
                 None,
-                action,
+                processed_action,
                 self.data,
                 val_tol=self.config_method['val_tol'],
                 memory=self.config_method['memory_size'],
@@ -78,17 +79,21 @@ class FSNetSafeguard(Safeguard):
             with torch.enable_grad():
                 safe_action = nondiff_lbfgs_solve(
                     None,
-                    action,
+                    processed_action,
                     self.data,
                     val_tol=self.config_method['val_tol'],
                     memory=self.config_method['memory_size'],
                     max_iter=self.config_method['max_iter'],
                     scale=self.config_method['scale'],
                 )
+    
 
         self.post_eq_violation = self.data.eq_resid(None, safe_action).square().sum(dim=1)
         self.post_ineq_violation = self.data.ineq_resid(None, safe_action).square().sum(dim=1)
 
+        safe_action = self.data.post_process_action(safe_action)
+        if torch.isnan(safe_action).any():
+            print("FSNetSafeguard: safe_action has NaN values", safe_action)
         return safe_action
 
     def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
@@ -109,10 +114,28 @@ class FSNetSafeguard(Safeguard):
             "post_eq_violation": self.post_eq_violation.mean().item(),
             "post_ineq_violation": self.post_ineq_violation.mean().item(),
         }
+    
+class DataInterface:
 
-class PolytopeData:
     def __init__(self,env):
         self.env = env
+    
+    def setup_resid(self, action):
+        pass
+
+    def pre_process_action(self, action):
+        return action
+    
+    def post_process_action(self, action):
+        return action
+    
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+
+    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(Y)
+
+class PolytopeData(DataInterface):
 
     def setup_resid(self, action):
         self.A, self.b = self.env.compute_A_b()
@@ -121,13 +144,9 @@ class PolytopeData:
         
     def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
         return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
+
     
-    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(Y)
-    
-class BoxData: #TODO: this is really slow for some reason. i guess its because of double the constraints
-    def __init__(self,env):
-        self.env = env
+class BoxData(DataInterface):
 
     def setup_resid(self, action):
         box = self.env.safe_action_set().box()
@@ -143,11 +162,67 @@ class BoxData: #TODO: this is really slow for some reason. i guess its because o
         self.box_max = (center + half_extents).to(dtype=action.dtype, device=action.device).detach()
         
     def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-
         return torch.cat([torch.relu(self.box_min - Y), torch.relu(Y - self.box_max)], dim=1)
+
+class ZonotopeData(DataInterface):
+
+    def setup_resid(self, action):
+        zonotope = self.env.safe_action_set()
+        self.center = zonotope.center
+        self.gen = zonotope.generator
+        if torch.isnan(self.center).any():
+            print("ZonotopeData: center has NaN values", self.center)
+        if torch.isnan(self.gen).any():
+            print("ZonotopeData: generator has NaN values", self.gen)
+        batch_dim, dim, num_generators = self.gen.shape
+
+        # for eq constraints Ax = b
+        # A with shape (batch_dim, dim, dim + num_generators)
+        # b with shape (batch_dim, dim, 1)
+        
+        self.A = torch.cat([
+                    torch.eye(dim, dtype=action.dtype, device=action.device).expand(batch_dim, dim, dim), 
+                    -self.gen
+                ], dim=2).detach() 
+        self.b = self.center.unsqueeze(2).detach() 
+        
+        # for ineq constraints Kx <= h
+        # K with shape (batch_dim, 2 * num_generators, dim + num_generators)
+        # h with shape (batch_dim, 2 * num_generators, 1)
+
+        K_half = torch.cat([
+                    torch.zeros((batch_dim, num_generators, dim), dtype=action.dtype, device=action.device),
+                    torch.eye(num_generators, dtype=action.dtype, device=action.device).expand(batch_dim, num_generators, num_generators)
+                ], dim=2)
+        
+        self.K = torch.cat([K_half, -K_half], dim=1).detach()  
+        self.h = torch.ones((batch_dim, 2 * num_generators, 1), dtype=action.dtype, device=action.device).detach()  
+
+    def pre_process_action(self, action):
+        if torch.isnan(action).any():
+            print("ZonotopeData: action has NaN values before pre_process_action", action)
+        # z with shape (batch_dim, dim + num_generators)
+        batch_dim, _, num_generators = self.gen.shape
+        gamma = torch.randn((batch_dim, num_generators), dtype=action.dtype, device=action.device).detach()
+        z = torch.cat([action, gamma], dim=1)
+        if torch.isnan(z).any():
+            print("ZonotopeData: z has NaN values after pre_process_action", z)
+        return z
     
+    def post_process_action(self, action):
+        return action[:, :self.env.action_dim]
+
     def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(Y)
+        resid = self.A @ Y.unsqueeze(2) - self.b
+        if torch.isnan(resid).any():
+            print("ZonotopeData: eq_resid has NaN values", resid)
+        return resid
+
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        resid = torch.relu(self.K @ Y.unsqueeze(2) - self.h)
+        if torch.isnan(resid).any():
+            print("ZonotopeData: ineq_resid has NaN values", resid)
+        return resid
 
 # ----------------------------------------------------------------------
 #  Code from FSNet/utils/lbfgs.py
@@ -611,4 +686,3 @@ def hybrid_lbfgs_solve(
     
     # Return with gradient connection only to differentiable phase
     return y + (y_nondiff - y).detach()
-  

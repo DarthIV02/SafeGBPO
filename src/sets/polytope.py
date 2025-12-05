@@ -15,7 +15,6 @@ import types
 import sys
 sys.modules['cdd'] = types.ModuleType("cdd")
 
-from pypoman import compute_polytope_vertices
 from scipy.spatial import HalfspaceIntersection
 
 class HPolytope(ConvexSet):

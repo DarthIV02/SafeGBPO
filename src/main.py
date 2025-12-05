@@ -13,7 +13,6 @@ from conf.experiment import Experiment
 torch.set_default_device("cpu") # "cuda" if torch.cuda.is_available() else
 torch.set_default_dtype(torch.float64)
 
-
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
     if trial is not None:
         cfg.learning_algorithm.vary(trial, cfg)
@@ -139,9 +138,9 @@ if __name__ == "__main__":
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(),
+                   safeguard=FSNetConfig(),
                    interactions=60_000,
-                   eval_freq=5_000,
+                   eval_freq=10_000,
                    fast_eval=False),
     ]
 
