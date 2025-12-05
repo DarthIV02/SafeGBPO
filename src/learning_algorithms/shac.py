@@ -130,10 +130,11 @@ class SHAC(LearningAlgorithm):
         Returns:
             The policy loss
         """
+        
         exponent = torch.arange(self.len_trajectories + 2).view(-1, 1).repeat(1, self.env.num_envs)
 
         for end, env in self.buffer.terminals.nonzero():
-            exponent[end + 1:, env] -= end + 1
+            exponent[end + 1:, env] = exponent[end + 1:, env] - (end + 1)
 
         discount = self.GAMMA ** exponent
         values = torch.where(self.buffer.terminals.tensor,
@@ -155,9 +156,11 @@ class SHAC(LearningAlgorithm):
         if self.buffer.store_safe_actions:
             # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
             #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
-            policy_loss += self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            safe_guard_loss = self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss = policy_loss + safe_guard_loss
 
         policy_loss.backward()
+        
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)
         self.policy_optim.step()
 
@@ -260,5 +263,5 @@ class SHAC(LearningAlgorithm):
         """
         with torch.no_grad():
             for target_param, param in zip(self.target_value_function.parameters(), self.value_function.parameters()):
-                target_param.data.mul_(self.polyak_target)
-                target_param.data.add_((1 - self.polyak_target) * param.data)
+                # safer, no .data
+                target_param.copy_(target_param * self.polyak_target + param * (1 - self.polyak_target))
