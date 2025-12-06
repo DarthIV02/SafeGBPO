@@ -1,3 +1,13 @@
+import sys
+import os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 from pathlib import Path
 from dataclasses import asdict
 from typing import Optional
@@ -73,87 +83,50 @@ if __name__ == "__main__":
     from conf.safeguard import *
     from conf.learning_algorithms import *
 
-    wandb.login(key="")
+    wandb.login()
 
-    ## Yasin note: 
-    ## we can define multiple Experiment runs in the queue. the Experiment is basically just all the configs that are then loaded in run_experiment()
-    ## an Experiment defines mainly the learning algorithm, safeguard and important for us the enviroment  
- 
-     # this is the experiment for the benchmarking in the paper
-    experiment_queue = [
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=None,
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+    experiment_queue = []
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=BoundaryProjectionConfig(),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+    
+    # experiment_queue.extend([
+    #     Experiment(num_runs=1, learNavigateSeekning_algorithm=SHACConfig(), env=erConfig(), safeguard=None, interactions=15_000, eval_freq=5_000, fast_eval=False),
+    #     Experiment(num_runs=1, learning_algorithm=SHACConfig(), env=NavigateSeekerConfig(), safeguard=BoundaryProjectionConfig(), interactions=15_000, eval_freq=5_000, fast_eval=False),
+    #     Experiment(num_runs=1, learning_algorithm=SHACConfig(), env=NavigateSeekerConfig(), safeguard=RayMaskConfig(zonotopic_approximation=True), interactions=15_000, eval_freq=5_000, fast_eval=False),
+    # ])
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=True),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=False),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=FSNetConfig(),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=PinetConfig(),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-    ]
-
-    # this is for testing purposes only
-    experiment_queue = [
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=BalancePendulumConfig(),
-                   safeguard=BoundaryProjectionConfig(),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=BalancePendulumConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=True),
-                   interactions=15_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-    ]
+    ## decide randomly
+    experiment_queue.append(
+        Experiment(
+            num_runs=1,
+            
+            learning_algorithm=SHACConfig(
+                len_trajectories=64, 
+            ),
+            
+            env=NavigateSeekerConfig(
+                num_envs=64,
+                num_steps=400,
+                draw_safe_action_set=False 
+            ),
+            
+            safeguard=FSNetTestConfig(
+                regularisation_coefficient=0.5,
+                fs_k=10,
+                fs_kp=5,
+                fs_eta=0.1,
+                eq_pen_coefficient=1.0,
+                ineq_pen_coefficient=1.0
+            ),
+            
+            interactions=2_000_000,
+            eval_freq=200_000,
+            fast_eval=False
+        )
+    )
 
     for i, experiment in enumerate(experiment_queue):
         if experiment.num_runs == 0:
             print("[STATUS] Running hyperparameter search")
-            ## Yasin note: 
-            ##  optuna is used to train the hyperparameters defined in the learning algorithm config
-            ## this is not that important for us since we have the hyperparameters already but study.optimize() basically just does the run_experiment()
             study = optuna.create_study(direction="maximize",
                                         sampler=optuna.samplers.TPESampler(),
                                         pruner=optuna.pruners.HyperbandPruner(),

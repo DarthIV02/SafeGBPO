@@ -150,10 +150,32 @@ class SHAC(LearningAlgorithm):
         ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
         ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
         
+        '''
+        ## comment out for update policy via FSNet output(action)
+        # --- FSNet Integration (Target Learning / Behavior Cloning approach) ---
+        # Instead of unrolling the optimization loop again (which is computationally expensive
+        # and complex to state-match), we treat the 'safe_actions' calculated during rollout
+        # as target labels. The policy learns to produce these safe actions directly.
+
+
         if self.buffer.store_safe_actions:
             # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
             #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
             policy_loss += self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+
+        policy_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)
+        self.policy_optim.step()
+        
+        '''
+
+        if self.buffer.store_safe_actions:
+            obs_batch = self.buffer.observations.tensor[:-1].reshape(-1, self.env.obs_dim)
+            current_actions = self.policy(obs_batch)
+
+            target_safe_actions = self.buffer.safe_actions.tensor.reshape(-1, self.env.action_dim)
+
+            policy_loss += self.env.safe_guard_loss(current_actions, target_safe_actions)
 
         policy_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)

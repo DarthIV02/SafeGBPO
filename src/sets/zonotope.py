@@ -322,23 +322,29 @@ class Zonotope(ConvexSet):
      # Implement by Saida, 
     # return how far points(NN outputs) are outside the zonotope
     # use for FSNet loss as validation
-    @jaxtyped(typechecker=beartype)
-    def validation(self, points: Float[Tensor, "{self.batch_dim} {self.dim}"], # fixed typo(self_dim -> self.dim)
-                   p: int =2) -> Float[Tensor, "{self.batch_dim}"]:
 
+    @jaxtyped(typechecker=beartype)
+    def validation(self, points: Float[Tensor, "batch_dim dim"], 
+                   p: int = 2) -> Float[Tensor, "batch_dim"]:
+        """
+        Computes the violation metric phi(a; x). 
+        Here we use the distance to the axis-aligned bounding box of the zonotope
+        as a differentiable proxy for the violation.
+        """
+        # ZonotopeのBox近似（中心 ± sum(|generators|))
         radii = self.generator.abs().sum(dim=2)
 
         lower = self.center - radii
         upper = self.center + radii
 
+        # 範囲外にはみ出している量を計算
         below = torch.clamp(lower - points, min=0.0)
         above = torch.clamp(points - upper, min=0.0)
 
         per_dim_violation = below + above
 
         if p == float("inf"):
-            # L-infinity norm across dimensions
             return per_dim_violation.max(dim=1).values
         else:
-            # Lp norm across dimensions (default: L2)
+            # L2 norm is generally better for optimization gradients
             return torch.linalg.vector_norm(per_dim_violation, ord=p, dim=1)

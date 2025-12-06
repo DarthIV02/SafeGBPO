@@ -73,6 +73,17 @@ class SACConfig(LearningAlgorithmConfig):
 
 
 @dataclass
+class FSNetDebuggerConfig(LearningAlgorithmConfig):
+    name: str = "FSNetDebugger"
+    
+    policy_kwargs: dict = field(default_factory=lambda: {"net_arch": [64, 64]})
+    
+    policy_optim_kwargs: dict = field(default_factory=lambda: {"lr": 1e-3})
+
+    def vary(self, trial: Trial, cfg):
+        pass
+
+@dataclass
 class SHACConfig(LearningAlgorithmConfig):
     len_trajectories: int = 64
     polyak_target: float = 0.4

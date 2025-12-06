@@ -165,3 +165,23 @@ cython_debug/
 
 # MP4 videos
 *.mp4
+
+# Checkpoints
+*.pt
+*.pth
+
+# Logs / outputs
+nohup.out
+*.log
+*.csv
+*.png
+
+# Devcontainer (個人環境用なら無視したほうが無難)
+.devcontainer/
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
