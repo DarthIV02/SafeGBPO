@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Any
 import time
 import os
+from torch.func import jacrev, vmap
+import torch.nn.functional as F
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -50,26 +52,6 @@ class BoxConstraint:
     def project(self, y: Tensor) -> Tensor:
         return torch.clamp(y, self.lb, self.ub)
 
-def _save_log(stage: str, data: dict, logfile_base: str):
-    """
-    Save dictionary of tensors to a .pt file.
-    Stage is either 'forward' or 'backward'.
-    Creates two separate files:
-        <logfile_base>_forward.pt
-        <logfile_base>_backward.pt
-    """
-    base = logfile_base
-    if base is None:
-        return
-    
-    # remove .pt if user put it in the base name
-    if base.endswith(".pt"):
-        base = base[:-3]
-
-    # choose file based on stage
-    outfile = f"{base}_{stage}.pt"
-    torch.save(data, outfile)
-
 # ---------------------------------------------------------------------------
 #                            PiNet Safeguard
 # ---------------------------------------------------------------------------
@@ -86,6 +68,7 @@ class PinetSafeguard(Safeguard):
         omega: float = 1.7,
         bwd_method: str = "implicit",
         debug: bool = False,
+        fpi: bool = False,
         **kwargs
     ):
         super().__init__(env)
@@ -98,8 +81,15 @@ class PinetSafeguard(Safeguard):
         self.sigma = sigma
         self.omega = omega
         self.bwd_method = bwd_method
+        self.fpi = fpi
         self.log_file = f"logs/{self.bwd_method}_admm_iter_{self.n_iter_admm}_bwd_{self.n_iter_bwd}"
 
+    def safeguard_metrics(self):
+        return  {
+            "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
+            "post_ineq_violation": self.post_constraint_violation.mean().item(),
+        }
+    
     @jaxtyped(typechecker=beartype)
     def safeguard(
         self,
@@ -111,12 +101,16 @@ class PinetSafeguard(Safeguard):
         # ----- Build Ax ≤ b -----
         A, b = self.env.compute_A_b()
 
+        self.pre_constraint_violation = torch.clamp(torch.bmm(A, action) - b.unsqueeze(2), min=0.0).squeeze(2)
+
         # ADMM projection function with implicit backward that returns the final safe action.
         y_safe = self._project_with_implicit(
             action=action,  # (B, D, 1)
             A=A,            # (B, m, D)
             b=b            # (B, m)
         )  # returns (B, D)
+
+        self.post_constraint_violation = torch.clamp(torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(2), min=0.0).squeeze(2)
 
         return y_safe  # already squeezed to (B, D)
 
@@ -125,10 +119,6 @@ class PinetSafeguard(Safeguard):
 
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
-        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
-    
     # ----------------------------------------------------------------------
     # Ruiz scaling
     # ----------------------------------------------------------------------
@@ -148,41 +138,31 @@ class PinetSafeguard(Safeguard):
             col_norm = torch.norm(M, p=1, dim=1, keepdim=True).clamp_min(eps)
             M = M / col_norm
             d_c = d_c / col_norm
+
         return M.detach(), d_r.detach(), d_c.detach()
-
-    def _run_admm(self, sk, y_raw, scale):
-        sk_iter = sk.clone()
-        sigma = torch.tensor(self.sigma, device=y_raw.device, dtype=y_raw.dtype)
-        omega = torch.tensor(self.omega, device=y_raw.device, dtype=y_raw.dtype)
+    
+    def _run_admm(self, sk, y_raw, scale, steps):
         D = self.action_dim
-        
-        # Clone scale slice to ensure it's a distinct tensor
-        scale_sub = scale[:, :D, :].clone() 
+        sk_iter = sk.clone()
 
-        for _ in range(self.n_iter_admm):
+        device, dtype = y_raw.device, y_raw.dtype
+        sigma = torch.tensor(self.sigma, device=device, dtype=dtype)
+        omega = torch.tensor(self.omega, device=device, dtype=dtype)
+
+        scale_sub = scale[:, :D, :]
+        y_raw_D = y_raw[:, :D, :]
+        denom = 1 / (1 + 2 * sigma * scale_sub**2)
+        addition = 2 * sigma * scale_sub * y_raw_D
+
+        for _ in range(steps):
             zk = self.eq.project(sk_iter)
-            reflect = 2*zk - sk_iter
+            reflect = 2 * zk - sk_iter
 
-            # 1. Force clones on slices to break "view" dependencies in the graph
-            # 2. Pre-calculate denominator
-            
-            y_raw_D = y_raw[:, :D, :].clone()
-            reflect_D = reflect[:, :D, :].clone()
-            reflect_rest = reflect[:, D:, :].clone()
-            
-            scale_sq = scale_sub ** 2
-            denom = 1 + 2 * sigma * scale_sq
-            
-            # Use multiplication by reciprocal instead of division to avoid DivBackward issues
-            inv_denom = torch.reciprocal(denom) 
-            
-            numerator = (2 * sigma * scale_sub * y_raw_D + reflect_D)
-            first = numerator * inv_denom
-
-            to_box = torch.cat([first, reflect_rest], dim=1)
-            tk = self.box.project(to_box)
-
-            sk_iter = sk_iter.clone() + omega*(tk - zk)  # avoid in-place updates
+            # inplace update instead of cat()
+            numerator = addition + reflect[:, :D, :]
+            reflect[:, :D, :] = numerator * denom
+            tk = self.box.project(reflect)
+            sk_iter = sk_iter + omega * (tk - zk)
 
         return sk_iter
 
@@ -220,6 +200,8 @@ class PinetSafeguard(Safeguard):
         # Ruiz scaling
         _, _, d_c = self._ruiz(Aeq)
         scale = d_c.transpose(1, 2)
+        scale_max = scale.max(dim=1, keepdim=True).values
+        scale_norm = scale / scale_max
 
         # Box constraint
         lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device, dtype=A.dtype)
@@ -232,27 +214,30 @@ class PinetSafeguard(Safeguard):
         self.box = BoxConstraint(lb, ub)
 
         # Call custom autograd Function
+        if self.debug:
+            start = time.time()
         if self.bwd_method == "implicit": 
 
             _ProjectImplicitFn.debug = self.debug
-            _ProjectImplicitFn.logfile = self.log_file
 
             y_safe = _ProjectImplicitFn.apply(
                 self._elevate(action, A.detach()),               # yraw
                 scale,                # d_c
+                scale_norm,           # d_c_norm
                 self._run_admm,       # step_iteration
                 self.eq.project,      # step_final
                 int(D),               # og_dim
                 int(total_dim),       # dim_lifted
                 self.n_iter_admm,     # n_iter
                 self.n_iter_bwd,      # n_iter_bwd
-                False,                # fpi
+                self.fpi,                # fpi
             )
         
         elif self.bwd_method == "unroll":
             y_safe = self.project_complete(
                 self._elevate(action, A.detach()),               # yraw
                 scale,                # d_c
+                scale_norm,           # d_c_norm
                 self._run_admm,       # step_iteration
                 self.eq.project,      # step_final
                 int(D),               # og_dim
@@ -261,54 +246,27 @@ class PinetSafeguard(Safeguard):
         
         else:
             raise ValueError(f"Unknown bwd_method: {self.bwd_method}")
+        
+        if self.debug:
+            end = time.time()
+            print("PinetSafeguard: ADMM projection took {:.6f} seconds".format(end - start))
 
         return y_safe
 
-    def project_complete(self, yraw, d_c,
+    def project_complete(self, yraw, d_c, d_c_norm,
                 step_iteration, step_final, og_dim, n_iter):
 
         # Forward: run ADMM iterations tracking all the gradients
         with torch.enable_grad():
             sK = torch.zeros_like(yraw, requires_grad=True)
 
-            for _ in range(n_iter):
-                sK = step_iteration(sK, yraw, d_c)
+            sK = step_iteration(sK, yraw, d_c, n_iter)
 
             y = step_final(sK)
 
-            y_scaled = y * d_c
+            y_scaled = y * d_c_norm
 
             result = y_scaled[:, :og_dim].squeeze(2)
-
-        if self.debug:
-            # storage dict for backward gradients
-            self._unroll_backward_grads = {}
-
-            def save_grad(name):
-                return lambda grad: self._unroll_backward_grads.__setitem__(name, grad.detach().cpu())
-
-            # register hook on y_scaled BEFORE returning
-            if not y_scaled.requires_grad:
-                raise RuntimeError(f"y_scaled does not require grad: {y_scaled!r}")
-            y_scaled.retain_grad()
-            y_scaled.register_hook(save_grad("grad_y_scaled"))
-
-            # also store forward values
-            _save_log("forward", {
-                "yraw": yraw.detach().cpu(),
-                "d_c": d_c.detach().cpu(),
-                "sK_final": sK.detach().cpu(),
-                "y_final": y.detach().cpu(),
-                "y_scaled": y_scaled.detach().cpu(),
-            }, self.log_file)
-
-            def save_final_grad(grad):
-                _save_log("backward", {
-                    "grad_y_scaled": self._unroll_backward_grads.get("grad_y_scaled", None),
-                    "grad_output": grad.detach().cpu(),
-                }, self.log_file)
-            
-            result.register_hook(save_final_grad)
 
         return result
 
@@ -320,41 +278,32 @@ class _ProjectImplicitFn(torch.autograd.Function):
     logfile = None
 
     @staticmethod
-    def forward(ctx, yraw, d_c,
+    def forward(ctx, yraw, d_c, d_c_norm,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
 
         # Forward: run ADMM iterations without tracking gradients
         sK = torch.zeros_like(yraw)
         with torch.no_grad():
-            for _ in range(n_iter):
-                sK = step_iteration(sK, yraw, d_c)
+            sK = step_iteration(sK, yraw, d_c, n_iter)
 
         y = step_final(sK).detach()
-        y_scaled = y * d_c
+        y_scaled = y * d_c_norm
+        #x = input()
 
         # Save for backward
 
-        ctx.save_for_backward(sK.clone().detach(), yraw.clone().detach(), d_c.clone().detach())
+        ctx.save_for_backward(sK.clone().detach(), yraw.clone().detach(), d_c.clone().detach(), d_c_norm.clone().detach())
         ctx.step_iteration = step_iteration
         ctx.step_final = step_final
         ctx.n_iter_bwd = n_iter_bwd
         ctx.dim_lifted = dim_lifted
         ctx.fpi = fpi
 
-        if _ProjectImplicitFn.debug:
-            _save_log("forward", {
-                "yraw": yraw.detach().cpu(),
-                "d_c": d_c.detach().cpu(),
-                "sK_final": sK.detach().cpu(),
-                "y_final": y.detach().cpu(),
-                "y_scaled": y_scaled.detach().cpu(),
-            }, _ProjectImplicitFn.logfile)
-
         return y_scaled[:, :og_dim].squeeze(2)
 
     @staticmethod
     def backward(ctx, grad_y):
-        sK, yraw, d_c = ctx.saved_tensors
+        sK, yraw, d_c, d_c_norm = ctx.saved_tensors
         step_iteration = ctx.step_iteration
         step_final = ctx.step_final
         n_iter_bwd = ctx.n_iter_bwd
@@ -365,7 +314,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
         grad_y = grad_y.unsqueeze(2).clone().detach()  # (B, D, 1)
 
         # Scale gradient back
-        grad_z = grad_y * d_c[:, :out_dim, :]
+        grad_z = grad_y * d_c_norm[:, :out_dim, :]
         y_for_vjp = torch.cat([
             grad_z,
             torch.zeros(batch, dim_lifted - out_dim, 1, device=grad_y.device)
@@ -390,7 +339,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
         # Implicit backward solve: (I - J_iteration)^T g = vjp       
         def iteration_vjp(v):
             with torch.enable_grad():
-                admm_plus = step_iteration(sK_bwd, yraw_bwd, d_c.clone())  # recompute fresh
+                admm_plus = step_iteration(sK_bwd, yraw_bwd, d_c, 1)  # recompute fresh
             return torch.autograd.grad(
                 outputs=admm_plus,
                 inputs=sK_bwd,
@@ -402,15 +351,21 @@ class _ProjectImplicitFn(torch.autograd.Function):
         if fpi:
             g = torch.zeros_like(vjp)
             for _ in range(n_iter_bwd):
-                g = iteration_vjp(g).clone() + vjp
+                g_new = iteration_vjp(g) + vjp
+                if _ProjectImplicitFn.debug:
+                    print("Pairwise Distance:", torch.nn.functional.pairwise_distance(g.view(batch, -1), g_new.view(batch, -1)).mean().item())
+                g = g_new
         else:
             g = vjp.clone()
             for _ in range(n_iter_bwd):
-                g = g + 0.1 * (vjp - (g - iteration_vjp(g).clone()))
+                g_new = g + 0.1 * (vjp - (g - iteration_vjp(g)))
+                if _ProjectImplicitFn.debug:
+                    print("Pairwise Distance:", torch.nn.functional.pairwise_distance(g.view(batch, -1), g_new.view(batch, -1)).mean().item())
+                g = g_new
 
         # Gradient w.r.t input yraw
         with torch.enable_grad():
-            admm_plus_last = step_iteration(sK_bwd, yraw_bwd, d_c.clone())
+            admm_plus_last = step_iteration(sK_bwd, yraw_bwd, d_c, 1)
         
         grad_yraw = torch.autograd.grad(
             outputs=admm_plus_last,
@@ -419,14 +374,5 @@ class _ProjectImplicitFn(torch.autograd.Function):
             retain_graph=False,
             allow_unused=False
         )[0]
-
-        if _ProjectImplicitFn.debug:
-            _save_log("backward", {
-                "grad_y_in": grad_y.detach().cpu(),
-                "grad_z": grad_z.detach().cpu(),
-                "vjp_projection": vjp.detach().cpu(),
-                "implicit_solution_g": g.detach().cpu(),
-                "grad_yraw": None if grad_yraw is None else grad_yraw.detach().cpu(),
-            }, _ProjectImplicitFn.logfile)
 
         return grad_yraw, None, None, None, None, None, None, None, None, None, None
