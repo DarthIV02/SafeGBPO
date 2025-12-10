@@ -39,3 +39,5 @@ class PinetConfig(SafeguardConfig):
     regularisation_coefficient: float = 0.1
     n_iter_admm: int = 10
     n_iter_bwd: int = 10
+    bwd_method: str = "implicit"  # "implicit" or "unroll"
+    fpi: bool = False

@@ -416,7 +416,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
                                             self.last_safe_action_set.generator[i:i + 1, :, :])
                 
-                    vertices = draw_set.vertices().cpu().numpy()
+                    vertices = draw_set.vertices().cpu().detach().numpy()
 
                 screen_vertices = [
                     (v[0] * scale + offset_x, -v[1] * scale + offset_y)
