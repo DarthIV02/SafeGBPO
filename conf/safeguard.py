@@ -29,10 +29,10 @@ class FSNetConfig(SafeguardConfig): #TODO: fill default valueS
     eq_pen_coefficient: float = 0.025
     ineq_pen_coefficient: float = 0.025
     val_tol: float = 1e-6
-    memory_size: int = 20
-    max_iter: int = 50
-    max_diff_iter: int = 10
-    scale : float = 1.0
+    # memory: int = 20
+    # max_iter: int = 50
+    # max_ls_iter: int = 10
+    # scale : float = 1.0
 
 @dataclass
 class PinetConfig(SafeguardConfig):
