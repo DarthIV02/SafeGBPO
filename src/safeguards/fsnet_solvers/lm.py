@@ -83,27 +83,33 @@ def batch_lm_solve(
     lambdas = torch.full((B, 1, 1), config.damping_init, device=device, dtype=dtype)
     
     # Get constraint matrices
-    # For ZonotopeData: eq_resid = A @ y - b, ineq_resid = relu(K @ y - h)
-    # Jacobian of eq_resid is just A
-    # Jacobian of ineq_resid is K where K @ y > h
+    # For ZonotopeData: eq_resid = C @ y - d, ineq_resid = relu(A @ y - b)
+    # For PolytopeData: no eq constraints, ineq_resid = relu(A @ y - b)
+    # Jacobian of eq_resid is just C
+    # Jacobian of ineq_resid is A where A @ y > b
     
-    A = data.A  # (B, m_eq, n)
-    b = data.b  # (B, m_eq, 1)
-    
-    if hasattr(data, 'K'):
-        K = data.K  # (B, m_ineq, n)
-        h = data.h  # (B, m_ineq, 1)
+    if hasattr(data, 'C') and data.C is not None:
+        C = data.C  # (B, m_eq, n) - equality constraint matrix
+        d = data.d  # (B, m_eq, 1) - equality constraint RHS
     else:
-        # PolytopeData case
-        K = data.A
-        h = data.b
+        C = None
+        d = None
+    
+    A = data.A  # (B, m_ineq, n) - inequality constraint matrix
+    b = data.b  # (B, m_ineq, 1) - inequality constraint RHS
     
     for k in range(config.max_iter):
         # Compute residuals (vectorized)
         y_expanded = y.unsqueeze(2)  # (B, n, 1) - expand once
         
-        eq_r = (A @ y_expanded - b).squeeze(2)  # (B, m_eq)
-        ineq_raw = (K @ y_expanded - h).squeeze(2)  # (B, m_ineq)
+        # Equality constraints: C @ y - d = 0
+        if C is not None:
+            eq_r = (C @ y_expanded - d).squeeze(2)  # (B, m_eq)
+        else:
+            eq_r = torch.zeros((B, 0), device=device, dtype=dtype)  # (B, 0) - no eq constraints
+        
+        # Inequality constraints: A @ y - b <= 0
+        ineq_raw = (A @ y_expanded - b).squeeze(2)  # (B, m_ineq)
         
         # Active set mask for inequality constraints
         active_mask = (ineq_raw > 0).unsqueeze(2)  # (B, m_ineq, 1)
@@ -116,10 +122,13 @@ def batch_lm_solve(
         current_loss = 0.5 * (r ** 2).sum(dim=1, keepdim=True)  # (B, 1)
         
         # Build Jacobian analytically
-        # J_eq = A for equality constraints
-        # J_ineq = K where active, 0 elsewhere (efficient masking)
-        K_masked = K * active_mask  # (B, m_ineq, n) - broadcast multiply
-        J = torch.cat([A, K_masked], dim=1)  # (B, m, n)
+        # J_eq = C for equality constraints
+        # J_ineq = A where active, 0 elsewhere (efficient masking)
+        A_masked = A * active_mask  # (B, m_ineq, n) - broadcast multiply
+        if C is not None:
+            J = torch.cat([C, A_masked], dim=1)  # (B, m, n)
+        else:
+            J = A_masked  # (B, m_ineq, n)
         
         # Compute gradient and Gauss-Newton Hessian
         JT = J.transpose(1, 2)  # (B, n, m)
@@ -146,8 +155,12 @@ def batch_lm_solve(
         y_new_expanded = y_new.unsqueeze(2)
         
         # Compute new residuals
-        eq_r_new = (A @ y_new_expanded - b).squeeze(2)
-        ineq_r_new = F.relu((K @ y_new_expanded - h).squeeze(2))
+        if C is not None:
+            eq_r_new = (C @ y_new_expanded - d).squeeze(2)
+        else:
+            eq_r_new = torch.zeros((B, 0), device=device, dtype=dtype)
+        
+        ineq_r_new = F.relu((A @ y_new_expanded - b).squeeze(2))
         r_new = torch.cat([eq_r_new, ineq_r_new], dim=1)
         new_loss = 0.5 * (r_new ** 2).sum(dim=1, keepdim=True)  # (B, 1)
         

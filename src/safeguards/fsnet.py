@@ -123,24 +123,24 @@ class DataInterface:
     def post_process_action(self, action):
         return action
     
-    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(Y)
-
     def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.zeros_like(Y)
+        if self.C is None or self.d is None:
+            return torch.zeros_like(Y)
+        return self.C @ Y.unsqueeze(2) - self.d
 
+    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+        if self.A is None or self.b is None:
+            return torch.zeros_like(Y)
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
 
 class PolytopeData(DataInterface):
 
     def setup_resid(self):
-        A, b = self.env.compute_A_b()
-        self.A = A.detach()
-        self.b = b.detach().unsqueeze(2)
+        polytope = self.env.safe_action_set()
+        self.A = polytope.A.detach()
+        self.b = polytope.b.detach().unsqueeze(2)
         
-    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
 
-    
 class BoxData(DataInterface):
 
     def setup_resid(self):
@@ -153,13 +153,15 @@ class BoxData(DataInterface):
         else:
             half_extents = gen.abs()
         
-        self.box_min = (center - half_extents).detach()
-        self.box_max = (center + half_extents).detach()
+        box_min = (center - half_extents)
+        box_max = (center + half_extents)
+
+        A_half = torch.eye(self.env.action_dim).expand(self.env.batch_size, self.env.action_dim, self.env.action_dim)
         
-    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        return torch.cat([torch.relu(self.box_min - Y), torch.relu(Y - self.box_max)], dim=1)
-
-
+        self.A = torch.cat([A_half, -A_half], dim=1).detach()
+        self.b = torch.cat([box_max, -box_min], dim=1).unsqueeze(2).detach()
+        
+ 
 
 class ZonotopeData(DataInterface):
 
@@ -170,27 +172,27 @@ class ZonotopeData(DataInterface):
 
         batch_dim, dim, num_generators = self.gen.shape
 
-        # for eq constraints Ax = b
-        # A with shape (batch_dim, dim, dim + num_generators)
-        # b with shape (batch_dim, dim, 1)
+        # for eq constraints Cx = d
+        # C with shape (batch_dim, dim, dim + num_generators)
+        # d with shape (batch_dim, dim, 1)
         
-        self.A = torch.cat([
+        self.C = torch.cat([
                 torch.eye(dim).expand(batch_dim, dim, dim), 
                 -self.gen
             ], dim=2).detach() 
-        self.b = center.unsqueeze(2).detach() 
+        self.d = center.unsqueeze(2).detach() 
         
-        # for ineq constraints Kx <= h
-        # K with shape (batch_dim, 2 * num_generators, dim + num_generators)
-        # h with shape (batch_dim, 2 * num_generators, 1)
+        # for ineq constraints  Ax <= b
+        # A with shape (batch_dim, 2 * num_generators, dim + num_generators)
+        # b with shape (batch_dim, 2 * num_generators, 1)
 
-        K_half = torch.cat([
+        A_half = torch.cat([
                 torch.zeros((batch_dim, num_generators, dim)),
                 torch.eye(num_generators).expand(batch_dim, num_generators, num_generators)
             ], dim=2)
         
-        self.K = torch.cat([K_half, -K_half], dim=1).detach()  
-        self.h = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
+        self.A = torch.cat([A_half, -A_half], dim=1).detach()  
+        self.b = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
 
     def pre_process_action(self, action):
         # z with shape (batch_dim, dim + num_generators)
@@ -202,12 +204,5 @@ class ZonotopeData(DataInterface):
     def post_process_action(self, action):
         return action[:, :self.env.action_dim]
 
-    def eq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        resid = self.A @ Y.unsqueeze(2) - self.b
-        return resid
-
-    def ineq_resid(self, X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-        resid = torch.relu(self.K @ Y.unsqueeze(2) - self.h)
-        return resid
 
  
