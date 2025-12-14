@@ -85,7 +85,7 @@ class PinetSafeguard(Safeguard):
         self.log_file = f"logs/{self.bwd_method}_admm_iter_{self.n_iter_admm}_bwd_{self.n_iter_bwd}"
 
     def safeguard_metrics(self):
-        return  {
+        return super().safeguard_metrics()  | {
             "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
             "post_ineq_violation": self.post_constraint_violation.mean().item(),
         }

@@ -28,11 +28,21 @@ class FSNetConfig(SafeguardConfig): #TODO: fill default valueS
     regularisation_coefficient: float = 0.1
     eq_pen_coefficient: float = 0.025
     ineq_pen_coefficient: float = 0.025
-    val_tol: float = 1e-6
-    # memory: int = 20
-    max_iter: int = 15
-    # max_ls_iter: int = 10
-    # scale : float = 1.0
+
+    # generic solver
+    val_tol: float = 1e-4
+    grad_tol: float = 1e-4
+    max_iter: int = 3
+    max_diff_iter : int = 2
+    # lbfgs specific
+    # memory: int = 10
+    # max_ls_iter: int = 5
+     # scale : float = 1.0
+    
+    # lm specific
+    damping_init: float = 1e-3
+    damping_up: float = 10.0
+    damping_down: float = 0.1
 
 @dataclass
 class PinetConfig(SafeguardConfig):

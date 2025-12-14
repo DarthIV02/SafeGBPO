@@ -88,4 +88,4 @@ class BoundaryProjectionSafeguard(Safeguard):
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
     
     def safeguard_metrics(self):
-        return super().safeguard_metrics()
+        return super().safeguard_metrics()  

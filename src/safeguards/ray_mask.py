@@ -420,3 +420,6 @@ class RayMaskSafeguard(Safeguard):
     def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
+    
+    def safeguard_metrics(self):
+        return super().safeguard_metrics() 

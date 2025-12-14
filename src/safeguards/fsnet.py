@@ -12,6 +12,8 @@ from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 from safeguards.fsnet_solvers.lbfgs import hybrid_lbfgs_solve, nondiff_lbfgs_solve
 from safeguards.fsnet_solvers.anderson import hybrid_anderson_solve, nondiff_anderson_solve
 from safeguards.fsnet_solvers.lm import  hybrid_lm_solve, nondiff_lm_solve, LMSolverConfig, batch_lm_solve
+from safeguards.fsnet_solvers.gradient_descent import gradient_descent_solve
+
 
 class FSNetSafeguard(Safeguard):
     """
@@ -102,7 +104,7 @@ class FSNetSafeguard(Safeguard):
         return loss
     
     def safeguard_metrics(self):
-        return  {
+        return  super().safeguard_metrics() | {
             "pre_eq_violation": self.pre_eq_violation.mean().item(),
             "pre_ineq_violation": self.pre_ineq_violation.mean().item(),
             "post_eq_violation": self.post_eq_violation.mean().item(),
@@ -113,6 +115,8 @@ class DataInterface:
 
     def __init__(self,env):
         self.env = env
+        self.C, self.d = None, None
+        self.A, self.b = None, None
     
     def setup_resid(self):
         pass
