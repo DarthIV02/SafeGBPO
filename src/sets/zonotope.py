@@ -346,3 +346,47 @@ class Zonotope(ConvexSet):
         vert = torch.hstack([vert, lower_half])
 
         return self.center[0].unsqueeze(1) + vert
+
+
+    def setup_resid(self):
+ 
+
+        batch_dim, dim, num_generators = self.generator.shape
+
+        # for eq constraints Cx = d
+        # C with shape (batch_dim, dim, dim + num_generators)
+        # d with shape (batch_dim, dim, 1)
+        
+        self.C = torch.cat([
+                torch.eye(dim).expand(batch_dim, dim, dim), 
+                -self.generator
+            ], dim=2).detach() 
+        self.d = self.center.unsqueeze(2).detach() 
+        
+        # for ineq constraints  Ax <= b
+        # A with shape (batch_dim, 2 * num_generators, dim + num_generators)
+        # b with shape (batch_dim, 2 * num_generators, 1)
+
+        A_half = torch.cat([
+                torch.zeros((batch_dim, num_generators, dim)),
+                torch.eye(num_generators).expand(batch_dim, num_generators, num_generators)
+            ], dim=2)
+        
+        self.A = torch.cat([A_half, -A_half], dim=1).detach()  
+        self.b = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
+
+    def pre_process_action(self, action):
+        # z with shape (batch_dim, dim + num_generators)
+        batch_dim, _, num_generators = self.generator.shape
+        gamma = torch.zeros((batch_dim, num_generators), dtype=action.dtype, device=action.device)
+        z = torch.cat([action, gamma], dim=1)
+        return z
+    
+    def post_process_action(self, action):
+        return action[:, :self.dim]
+    
+    def eq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        return self.C @ Y.unsqueeze(2) - self.d
+
+    def ineq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)

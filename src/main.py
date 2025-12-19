@@ -10,7 +10,7 @@ from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu") # 
+torch.set_default_device("cuda:1" if torch.cuda.is_available() else "cpu") # 
 torch.set_default_dtype(torch.float64)
 
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
@@ -139,8 +139,8 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=  FSNetConfig(),
-                   interactions=60_000,
-                   eval_freq=10_000,
+                   interactions=200_000,
+                   eval_freq=25_000,
                    fast_eval=False),
     ]
 

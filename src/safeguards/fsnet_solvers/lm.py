@@ -9,11 +9,12 @@ class LMSolverConfig:
         self,
         max_iter: int = 5,
         damping_init: float = 1e-3,
-        damping_up: float = 10.0,
+        damping_up: float = 20.0,  # Faster rejection of bad steps
         damping_down: float = 0.1,
         val_tol: float = 1e-6,
         grad_tol: float = 1e-6,
-        verbose: bool = False
+        verbose: bool = False,
+        **kwargs
     ):
         self.max_iter = max_iter
         self.damping_init = damping_init
@@ -98,21 +99,25 @@ def batch_lm_solve(
     A = data.A  # (B, m_ineq, n) - inequality constraint matrix
     b = data.b  # (B, m_ineq, 1) - inequality constraint RHS
     
+    # Get dimensions
+    m_ineq = A.shape[1]
+    m_eq = C.shape[1] if C is not None else 0
+    
     for k in range(config.max_iter):
         # Compute residuals (vectorized)
-        y_expanded = y.unsqueeze(2)  # (B, n, 1) - expand once
+        y_expanded = y.unsqueeze(2)  # (B, n, 1)
         
         # Equality constraints: C @ y - d = 0
         if C is not None:
             eq_r = (C @ y_expanded - d).squeeze(2)  # (B, m_eq)
         else:
-            eq_r = torch.zeros((B, 0), device=device, dtype=dtype)  # (B, 0) - no eq constraints
+            eq_r = torch.empty((B, 0), device=device, dtype=dtype)  # (B, 0)
         
         # Inequality constraints: A @ y - b <= 0
         ineq_raw = (A @ y_expanded - b).squeeze(2)  # (B, m_ineq)
         
         # Active set mask for inequality constraints
-        active_mask = (ineq_raw > 0).unsqueeze(2)  # (B, m_ineq, 1)
+        active_mask = (ineq_raw > 0)  # (B, m_ineq) - boolean mask
         
         # Use fused ReLU (GPU-optimized kernel)
         ineq_r = F.relu(ineq_raw)  # (B, m_ineq)
@@ -124,31 +129,33 @@ def batch_lm_solve(
         # Build Jacobian analytically
         # J_eq = C for equality constraints
         # J_ineq = A where active, 0 elsewhere (efficient masking)
-        A_masked = A * active_mask  # (B, m_ineq, n) - broadcast multiply
+        A_masked = A * active_mask.unsqueeze(2)  # (B, m_ineq, n)
         if C is not None:
             J = torch.cat([C, A_masked], dim=1)  # (B, m, n)
         else:
             J = A_masked  # (B, m_ineq, n)
         
-        # Compute gradient and Gauss-Newton Hessian
+        # Compute gradient and Gauss-Newton Hessian (fused operations)
         JT = J.transpose(1, 2)  # (B, n, m)
         JTr = torch.bmm(JT, r.unsqueeze(2)).squeeze(2)  # (B, n)
+        
+        # Early termination check (avoid expensive solve if converged)
+        grad_norm_sq = (JTr ** 2).sum(dim=1, keepdim=True)
+        if (grad_norm_sq < config.grad_tol ** 2).all():
+            break
+        
         JTJ = torch.bmm(JT, J)  # (B, n, n)
         
-        # Add damping (lambdas already shaped for broadcasting)
-        H_damped = JTJ + lambdas * eye_n
+        # Add damping + stability (proper broadcasting)
+        H_damped = JTJ + lambdas * eye_n + 1e-8 * eye_n
         
-        # Add numerical stability to ensure positive definiteness
-        H_damped = H_damped + 1e-8 * eye_n
-        
-        # Solve for update (batched Cholesky is GPU-optimized)
+        # Use LU decomposition (faster than Cholesky for ill-conditioned systems)
         try:
-            L = torch.linalg.cholesky(H_damped)
-            delta = torch.cholesky_solve(-JTr.unsqueeze(2), L).squeeze(2)
-        except RuntimeError:
-            # Fallback: add more regularization
-            H_damped = H_damped + 1e-4 * eye_n
             delta = torch.linalg.solve(H_damped, -JTr.unsqueeze(2)).squeeze(2)
+        except RuntimeError:
+            # Fallback: use gradient descent step with diagonal approximation
+            diag = torch.diagonal(JTJ, dim1=1, dim2=2) + lambdas.squeeze() + 1e-4
+            delta = -JTr / diag
         
         # Evaluate new point
         y_new = y + delta
@@ -201,12 +208,143 @@ def nondiff_lm_solve(
     config: Optional[LMSolverConfig] = None,
     **kwargs
 ) -> torch.Tensor:
-    """Non-differentiable LM solver."""
+    """
+    Non-differentiable LM solver with aggressive in-place optimizations.
+    
+    Much faster than batch_lm_solve due to:
+    - Pre-allocated buffers reused across iterations
+    - In-place operations (no autograd overhead)
+    - Reduced memory allocations
+    """
     if config is None:
         config = LMSolverConfig(**kwargs)
     
     with torch.no_grad():
-        return batch_lm_solve(x, y_init, data, config)
+        B, n = y_init.shape
+        device, dtype = y_init.device, y_init.dtype
+        y = y_init.clone()
+        
+        # Pre-allocate identity matrix once (GPU optimization)
+        eye_n = torch.eye(n, device=device, dtype=dtype).unsqueeze(0)  # (1, n, n)
+        
+        # Damping parameters per batch sample - shape (B, 1, 1) for broadcasting
+        lambdas = torch.full((B, 1, 1), config.damping_init, device=device, dtype=dtype)
+        
+        # Get constraint matrices
+        if hasattr(data, 'C') and data.C is not None:
+            C = data.C  # (B, m_eq, n) - equality constraint matrix
+            d = data.d  # (B, m_eq, 1) - equality constraint RHS
+        else:
+            C = None
+            d = None
+        
+        A = data.A  # (B, m_ineq, n) - inequality constraint matrix
+        b = data.b  # (B, m_ineq, 1) - inequality constraint RHS
+        
+        # Pre-allocate buffers for reuse (avoid repeated allocations)
+        m_ineq = A.shape[1]
+        m_eq = C.shape[1] if C is not None else 0
+        m = m_eq + m_ineq
+        
+        # Pre-allocate working tensors
+        y_expanded = torch.empty((B, n, 1), device=device, dtype=dtype)
+        ineq_raw = torch.empty((B, m_ineq), device=device, dtype=dtype)
+        r = torch.empty((B, m), device=device, dtype=dtype)
+        J = torch.empty((B, m, n), device=device, dtype=dtype)
+        
+        # Pre-compute equality part of Jacobian (constant)
+        if C is not None:
+            J[:, :m_eq, :] = C
+        
+        for k in range(config.max_iter):
+            # Reuse y_expanded buffer (in-place update)
+            y_expanded.copy_(y.unsqueeze(2))
+            
+            # Equality constraints: C @ y - d = 0 (in-place)
+            if C is not None:
+                torch.bmm(C, y_expanded, out=r[:, :m_eq].unsqueeze(2)).squeeze_(2).sub_(d.squeeze(2))
+            
+            # Inequality constraints: A @ y - b <= 0 (in-place)
+            torch.bmm(A, y_expanded, out=ineq_raw.unsqueeze(2)).squeeze_(2).sub_(b.squeeze(2))
+            
+            # Active set mask and ReLU (combined)
+            active_mask = (ineq_raw > 0)  # (B, m_ineq) - boolean mask
+            
+            # Use ReLU and copy to residual buffer
+            r[:, m_eq:] = F.relu(ineq_raw)
+            
+            # Current loss
+            current_loss = 0.5 * (r ** 2).sum(dim=1, keepdim=True)  # (B, 1)
+            
+            # Build Jacobian inequality part (in-place masking)
+            # Only update inequality part (equality part is pre-computed)
+            J[:, m_eq:, :] = A
+            J[:, m_eq:, :].mul_(active_mask.unsqueeze(2))  # Zero out inactive constraints
+            
+            # Compute gradient and Gauss-Newton Hessian (fused operations)
+            JT = J.transpose(1, 2)  # (B, n, m)
+            JTr = torch.bmm(JT, r.unsqueeze(2)).squeeze(2)  # (B, n)
+            
+            # Early termination check
+            grad_norm_sq = (JTr ** 2).sum(dim=1, keepdim=True)
+            if (grad_norm_sq < config.grad_tol ** 2).all():
+                break
+            
+            JTJ = torch.bmm(JT, J)  # (B, n, n)
+            
+            # Add damping + stability (proper broadcasting)
+            H_damped = JTJ + lambdas * eye_n + 1e-8 * eye_n
+            
+            # Use LU decomposition (faster than Cholesky for ill-conditioned systems)
+            try:
+                delta = torch.linalg.solve(H_damped, -JTr.unsqueeze(2)).squeeze(2)
+            except RuntimeError:
+                # Fallback: use gradient descent step with diagonal approximation
+                diag = torch.diagonal(JTJ, dim1=1, dim2=2) + lambdas.squeeze() + 1e-4
+                delta = -JTr / diag
+            
+            # Evaluate new point
+            y_new = y + delta
+            y_new.unsqueeze_(2)  # In-place: (B, n, 1)
+            
+            # Compute new residuals (reuse buffers where possible)
+            r_new = torch.empty_like(r)
+            if C is not None:
+                torch.bmm(C, y_new, out=r_new[:, :m_eq].unsqueeze(2)).squeeze_(2).sub_(d.squeeze(2))
+            
+            torch.bmm(A, y_new, out=r_new[:, m_eq:].unsqueeze(2)).squeeze_(2).sub_(b.squeeze(2))
+            r_new[:, m_eq:] = F.relu(r_new[:, m_eq:])
+            
+            y_new.squeeze_(2)  # Back to (B, n)
+            new_loss = 0.5 * (r_new ** 2).sum(dim=1, keepdim=True)  # (B, 1)
+            
+            # Accept/reject (in-place update, fully parallel)
+            improved = (new_loss < current_loss).squeeze(1)  # (B,)
+            improved_mask = improved.unsqueeze(1)  # (B, 1)
+            
+            # In-place update for y
+            y[improved_mask.expand_as(y)] = y_new[improved_mask.expand_as(y)]
+            
+            # Update damping (in-place, vectorized)
+            lambdas.mul_(torch.where(
+                improved.view(B, 1, 1),
+                torch.tensor(config.damping_down, device=device, dtype=dtype),
+                torch.tensor(config.damping_up, device=device, dtype=dtype)
+            ))
+            lambdas.clamp_(min=1e-8, max=1e5)
+            
+            if config.verbose and k % 2 == 0:
+                print(f"Iter {k:3d}: loss = {current_loss.mean().item():.3e}, "
+                      f"grad_norm = {JTr.abs().max().item():.3e}")
+        
+        # Optional: check convergence at the end (single sync)
+        if config.verbose:
+            final_loss = current_loss.mean().item()
+            final_grad = JTr.abs().max().item()
+            if final_loss < config.val_tol or final_grad < config.grad_tol:
+                print(f"Converged: loss={final_loss:.3e}, grad={final_grad:.3e}")
+        
+        return y
 
 
 def hybrid_lm_solve(

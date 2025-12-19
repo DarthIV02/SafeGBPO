@@ -38,6 +38,9 @@ class HPolytope(ConvexSet):
             raise ValueError("A and b must have same num_constraints.")
         self.A = A
         self.b = b
+
+        self.C, self.d = None, None
+
         self.batch_dim = A.shape[0]
         self.num_constraints = A.shape[1]
         self.dim = A.shape[2]
@@ -375,3 +378,19 @@ class HPolytope(ConvexSet):
         t_upper = torch.min(torch.where(denom > epsilon, t, torch.full_like(t, float("inf"))), dim=1).values
 
         return t_lower, t_upper
+    
+    def setup_resid(self):
+        self.A = self.A.detach()
+        self.b = self.b.detach()
+    
+    def pre_process_action(self, action):
+        return action
+    
+    def post_process_action(self, action):
+        return action
+    
+    def eq_resid(self, X: torch.Tensor= None, Y: torch.Tensor = None) -> torch.Tensor:
+        return torch.zeros_like(Y)
+
+    def ineq_resid(self, X: torch.Tensor= None, Y: torch.Tensor = None) -> torch.Tensor:
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b.unsqueeze(2)) 
