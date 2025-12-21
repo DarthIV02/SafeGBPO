@@ -88,7 +88,8 @@ class LBFGSConfig:
         c: float = 1e-4,
         rho_ls: float = 0.5,
         max_ls_iter: int = 10,
-        verbose: bool = False
+        verbose: bool = False,
+        **kwargs
     ):
         self.max_iter = max_iter
         self.memory = memory

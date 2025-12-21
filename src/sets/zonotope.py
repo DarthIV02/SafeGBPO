@@ -349,11 +349,20 @@ class Zonotope(ConvexSet):
 
 
     def setup_resid(self):
- 
+        """
+        Setup the residuals for FSNet solver interface.
+        Constructs the A, b, C, d  constraint matrices for the zonotope representation.
+        specifically the point containment in the zonotope Z = { x | x = c + Gβ , ||β||∞ <= 1 }
+        where c is the center, G is the generator matrix, and β are the generator coefficients.
+        
+        The equality constraints are Cz = d with z = [y; β] and c is the center of the zonotope
+        The inequality constraints are Az <= b with z = [y; β] and b is the box constraints on β.
+
+        """
 
         batch_dim, dim, num_generators = self.generator.shape
 
-        # for eq constraints Cx = d
+        # for eq constraints Cz = d
         # C with shape (batch_dim, dim, dim + num_generators)
         # d with shape (batch_dim, dim, 1)
         
@@ -363,7 +372,7 @@ class Zonotope(ConvexSet):
             ], dim=2).detach() 
         self.d = self.center.unsqueeze(2).detach() 
         
-        # for ineq constraints  Ax <= b
+        # for ineq constraints  Az <= b
         # A with shape (batch_dim, 2 * num_generators, dim + num_generators)
         # b with shape (batch_dim, 2 * num_generators, 1)
 
@@ -376,17 +385,51 @@ class Zonotope(ConvexSet):
         self.b = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
 
     def pre_process_action(self, action):
-        # z with shape (batch_dim, dim + num_generators)
+        """
+        
+        Pre-process the action to fit the zonotope representation. 
+        z = [a; gamma], where a is the action and gamma are the generator coefficients.
+        z has shape (batch_size, dim + num_generators)
+        Args:
+            action: The action to pre-process.
+        Returns:
+                The pre-processed action.
+            """
         batch_dim, _, num_generators = self.generator.shape
-        gamma = torch.zeros((batch_dim, num_generators), dtype=action.dtype, device=action.device)
-        z = torch.cat([action, gamma], dim=1)
+        z = torch.nn.functional.pad(action, (0, num_generators)) # to allow for backpropagation through actions outside the zonotope
         return z
     
     def post_process_action(self, action):
+        """
+        Post-process the action to extract the original action from the zonotope representation.
+        z = [a; gamma], where a is the action and gamma are the generator coefficients
+        Args:
+            action: The action to post-process.
+        Returns:
+            The post-processed action.
+        """
         return action[:, :self.dim]
     
     def eq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute the residual for equality constraints Cy = d.
+        X exist for compatibility with FSNet interface which can handle input dependent constraints.
+        Args:
+            X: Optional input tensor (not used in this method).
+            Y: The tensor to check against the equality constraints.
+        Returns:
+            The residual tensor for the equality constraints.
+        """
         return self.C @ Y.unsqueeze(2) - self.d
 
     def ineq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute the residual for inequality constraints Ay <= b.
+        X exist for compatibility with FSNet interface which can handle input dependent constraints.
+        Args:
+            X: Optional input tensor (not used in this method).
+            Y: The tensor to check against the inequality constraints.
+        Returns:
+            The residual tensor for the inequality constraints.
+        """
         return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
