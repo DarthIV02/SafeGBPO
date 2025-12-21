@@ -137,10 +137,10 @@ if __name__ == "__main__":
     experiment_queue = [
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(num_envs=24, polytopic_approach = True),
-                   safeguard=PinetJAXConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5),
-                   interactions=60_000,
-                   eval_freq=15_000,
+                   env=NavigateSeekerConfig(),
+                   safeguard=  FSNetConfig(),
+                   interactions=200_000,
+                   eval_freq=25_000,
                    fast_eval=False),
     ]
 

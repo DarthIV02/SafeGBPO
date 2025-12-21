@@ -76,10 +76,8 @@ class Logger:
         """
         self.log_performance()
         self.log_data["train/Average Reward"] = average_reward
-        print("Interventions Logger: ")
         if hasattr(self.env, "interventions"):
             self.log_data["train/Interventions"] = self.env.interventions
-            print(self.env.interventions)
         for i, val in enumerate(self.model.policy.log_std.detach().cpu().numpy()):
             self.log_data[f"train/log(std_{i})"] = val
         self.log_data["train/Policy Loss"] = policy_loss

@@ -92,7 +92,7 @@ class Safeguard(VectorActionWrapper, ABC):
             """)
 
         self.safe_action = safe_action
-
+        self.dist_safe_action = torch.norm(self.safe_action - action, dim=1).mean().item()
         self.interventions += ((~torch.isclose(safe_action, action)).count_nonzero(dim=1) == self.action_dim).sum().item()
         return safe_action
 
@@ -136,7 +136,7 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             A dictionary of metrics.
         """
-        return {}
+        return {"dist_safe_action": self.dist_safe_action}
 
     @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \

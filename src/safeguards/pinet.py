@@ -121,7 +121,7 @@ class PinetSafeguard(Safeguard):
         #self.admm_kernel = make_admm_kernel(self.action_dim, self.n_iter_admm)
 
     def safeguard_metrics(self):
-        return  {
+        return super().safeguard_metrics()  | {
             "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
             "post_ineq_violation": self.post_constraint_violation.mean().item(),
         }
