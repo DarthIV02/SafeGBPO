@@ -32,6 +32,9 @@ class FSNetSafeguard(Safeguard):
         self.eq_pen_coefficient = eq_pen_coefficient
         self.ineq_pen_coefficient = ineq_pen_coefficient 
 
+        self.regularisation_coefficient = regularisation_coefficient
+        self.eq_pen_coefficient = eq_pen_coefficient
+        self.ineq_pen_coefficient = ineq_pen_coefficient 
         self.config_method = kwargs
 
         if self.env.polytope:
@@ -45,6 +48,10 @@ class FSNetSafeguard(Safeguard):
         else:
             self.solver =     hybrid_lm_solve
             self.nondiff_solver =   nondiff_lm_solve
+
+        self.debug_mode = False
+        self.last_trajectory = None
+        self.last_unsafe_action = None
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -66,7 +73,9 @@ class FSNetSafeguard(Safeguard):
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad)
         start_time = time()
+
         if torch.is_grad_enabled():
+            # Training phase: usually no debug needed, keep it fast
             safe_action = self.solver(
                 None,
                 processed_action,
@@ -74,13 +83,22 @@ class FSNetSafeguard(Safeguard):
                 **self.config_method
             )
         else:
+            # Eval phase: enable debug if requested
             with torch.enable_grad():
-                safe_action = self.nondiff_solver(
+                result = self.nondiff_solver(
                     None,
                     processed_action,
                     self.data,
+                    debug_trajectory=self.debug_mode, # Pass flag
                     **self.config_method
                 )
+            
+            if self.debug_mode and isinstance(result, tuple):
+                safe_action, trajectory = result
+                self.last_trajectory = trajectory # Store trajectory list
+                self.last_unsafe_action = action.detach().cpu()
+            else:
+                safe_action = result
         #print(f"FSNet safeguard time: {time() - start_time:.4f} seconds")
     
 
@@ -107,6 +125,40 @@ class FSNetSafeguard(Safeguard):
             "pre_ineq_violation": self.pre_ineq_violation.mean().item(),
             "post_eq_violation": self.post_eq_violation.mean().item(),
             "post_ineq_violation": self.post_ineq_violation.mean().item(),
+        }
+
+    def get_visualization_data(self):
+        """Helper to extract data for plotting later."""
+        if self.last_trajectory is None:
+            return None
+        
+        # リスト内のTensorを結合してCPUに移す (List[Tensor] -> Tensor)
+        # shape: (Steps, Batch, Dim)
+        traj_stack = torch.stack(self.last_trajectory).detach().cpu()
+        
+        # Unsafe Action も CPUへ
+        unsafe_cpu = self.last_unsafe_action.detach().cpu()
+
+        # 安全領域のデータ (数値のみ抽出)
+        # ※ self.data オブジェクトそのものは保存しない！
+        safe_set_info = {}
+        
+        # Zonotopeの場合 (center, generators)
+        # 環境から直接値を取り出して Tensor として保存する
+        try:
+            # 環境のメソッドを呼び出して値だけコピーする
+            zonotope = self.env.safe_action_set()
+            safe_set_info["safe_set_center"] = zonotope.center.detach().cpu()
+            safe_set_info["safe_set_generators"] = zonotope.generator.detach().cpu()
+        except Exception:
+            # Zonotopeでない場合、あるいは取得失敗時のフォールバック
+            pass
+
+        # 辞書を作成 (ここにはクラスインスタンスを含めない)
+        return {
+            "trajectory": traj_stack,
+            "unsafe_action": unsafe_cpu,
+            **safe_set_info  # 辞書を結合
         }
     
 class DataInterface:

@@ -94,7 +94,7 @@ class SHAC(LearningAlgorithm):
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
-    def collect_trajectories(self) -> float:
+    def collect_trajectories(self, capture_visuals: bool = False) -> float:
         """
         Collect trajectories using the current policy.
 
@@ -102,12 +102,24 @@ class SHAC(LearningAlgorithm):
             The average reward collected during the trajectories.
         """
         self.env.cut_computation_graph()
+        real_env = self.env
+        if hasattr(real_env, "debug_mode"):
+             real_env.debug_mode = capture_visuals
         average_reward = 0.0
         t = 0
         while t < self.len_trajectories:
             action = self.policy(self.buffer.observations[self.buffer.t])
             observation, reward, terminated, truncated, info = self.env.step(action)
             terminal = terminated | truncated
+
+            if capture_visuals and t == 0:
+                if hasattr(self.env, "get_visualization_data"):
+                    vis_data = self.env.get_visualization_data()
+                    if vis_data:
+                        self.latest_vis_data = vis_data
+                        # Reset debug mode immediately to save compute for rest of trajectory
+                        if hasattr(self.env, "debug_mode"):
+                            self.env.debug_mode = False
 
             value = self.target_value_function(observation).squeeze(dim=1)
 
@@ -119,6 +131,9 @@ class SHAC(LearningAlgorithm):
             self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             t += 1
             average_reward += reward.sum().item()
+
+        if hasattr(self.env, "debug_mode"):
+            self.env.debug_mode = False
         return average_reward / self.env.num_envs / self.len_trajectories
 
     @jaxtyped(typechecker=beartype)

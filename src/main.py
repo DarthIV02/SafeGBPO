@@ -76,6 +76,32 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     run.finish()
     # ---------------------------------------------------------
 
+    print("Capturing visualization data...")
+
+    obs, _ = env.reset()
+
+    unsafe_action_single = torch.tensor([2.0, 2.0], device=obs.device)
+    target_action = unsafe_action_single.unsqueeze(0).expand(env.num_envs, -1)
+
+    env.debug_mode = True 
+    
+    with torch.no_grad():
+        _ = env.step(target_action)
+    env.debug_mode = False
+
+    if hasattr(env, "get_visualization_data"):
+        data = env.get_visualization_data()
+        
+        if data is None:
+            print(">>> [ERROR] Visualization data is None! Check if debug_mode worked.")
+        else:
+            torch.save(data, "projection_viz.pt")
+            print("Saved projection_viz.pt")
+            if 'trajectory' in data:
+                print(f"Captured trajectory steps: {len(data['trajectory'])}")
+
+
+
     return logger.best_reward
 
 
@@ -92,57 +118,66 @@ if __name__ == "__main__":
  
      # this is the experiment for the benchmarking in the paper
     experiment_queue = [
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=None,
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=1,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=None,
+        #            interactions=60_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=BoundaryProjectionConfig(),
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=1,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=BoundaryProjectionConfig(),
+        #            interactions=60_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=False, polytopic_approximation=True),
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=1,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=RayMaskConfig(zonotopic_approximation=False, polytopic_approximation=True),
+        #            interactions=60_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
         
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=FSNetConfig(),
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=1,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=FSNetConfig(),
+        #            interactions=60_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=PinetConfig(),
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=1,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=PinetConfig(),
+        #            interactions=60_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
+        Experiment(
+        num_runs=1,
+        learning_algorithm=SHACConfig(),
+        env=NavigateSeekerConfig(),
+        safeguard=FSNetConfig(),
+        interactions=100,
+        eval_freq=1000,
+        fast_eval=True
+    )
     ]
 
     # this is for testing purposes only
-    experiment_queue = [
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=  FSNetConfig(),
-                   interactions=60_000,
-                   eval_freq=10_000,
-                   fast_eval=False),
-    ]
+    # experiment_queue = [
+    #     Experiment(num_runs=1,
+    #                learning_algorithm=SHACConfig(),
+    #                env=NavigateSeekerConfig(),
+    #                safeguard=  FSNetConfig(),
+    #                interactions=60_000,
+    #                eval_freq=10_000,
+    #                fast_eval=False),
+    # ]
 
     for i, experiment in enumerate(experiment_queue):
         if experiment.num_runs == 0:

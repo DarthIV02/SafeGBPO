@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Optional, Callable
+from typing import Tuple, Optional, Callable, Union, List
 
 # Differentiable and nondifferentiable L-BFGS solver
 
@@ -241,8 +241,9 @@ def nondiff_lbfgs_solve(
     Y_hist: Optional[torch.Tensor] = None,
     hist_len: int = 0,
     hist_ptr: int = 0,
+    debug_trajectory: bool = False,
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """
     Non-differentiable L‑BFGS solver that doesn't build backward graph.
     
@@ -270,9 +271,15 @@ def nondiff_lbfgs_solve(
     """
     if config is None:
         config = LBFGSConfig(**kwargs)
+
+    trajectory = []
     
     # Initialize without gradient tracking
     y = y_init.detach().clone().requires_grad_(True)
+
+    if debug_trajectory:
+        trajectory.append(y.detach().cpu().clone())
+
     B, n = y_init.shape
     device, dtype = y_init.device, y_init.dtype
     
@@ -312,6 +319,9 @@ def nondiff_lbfgs_solve(
         step = _backtracking_line_search(y, d, g, f_val, obj_func, config)
         
         y_next = y + step * d
+
+        if debug_trajectory:
+            trajectory.append(y_next.detach().cpu().clone())
         
         # Update history with detached tensors
         y_next.requires_grad_(True)
@@ -330,8 +340,11 @@ def nondiff_lbfgs_solve(
         if config.verbose and k % 5 == 0:
             print(f"Iter {k:3d}: f = {f_next.item()/config.scale:.3e}, "
                   f"|g| = {g_next.norm():.3e}, step = {step:.3e}")
+
+        if debug_trajectory:
+            return y, trajectory
+        return y
     
-    return y
 
 
 def hybrid_lbfgs_solve(
@@ -340,8 +353,9 @@ def hybrid_lbfgs_solve(
     data,
     max_diff_iter: int = 20,
     config: Optional[LBFGSConfig] = None,
+    debug_trajectory: bool = False,
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, list]]:
     """
     Hybrid L‑BFGS solver with truncated backpropagation.
     
@@ -370,6 +384,10 @@ def hybrid_lbfgs_solve(
     """
     if config is None:
         config = LBFGSConfig(**kwargs)
+
+    trajectory = []
+    if debug_trajectory:
+        trajectory.append(y_init.detach().cpu().clone())
     
     # Create a config for the differentiable phase
     diff_config = LBFGSConfig(
@@ -422,6 +440,9 @@ def hybrid_lbfgs_solve(
         f_next = obj_func(y_next)
         g_next = torch.autograd.grad(f_next, y_next, create_graph=True)[0]
         
+        if debug_trajectory:
+            trajectory.append(y_next.detach().cpu().clone())
+        
         # Update history
         S_hist[hist_ptr] = y_next - y
         Y_hist[hist_ptr] = g_next - g
@@ -457,5 +478,10 @@ def hybrid_lbfgs_solve(
         hist_ptr=hist_ptr
     )
     
-    # Return with gradient connection only to differentiable phase
-    return y + (y_nondiff - y).detach()
+    final_action = y + (y_nondiff - y).detach()
+        
+    if debug_trajectory:
+        trajectory.append(final_action.detach().cpu().clone())
+        return final_action, trajectory
+    else:
+        return final_action

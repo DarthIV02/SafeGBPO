@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from typing import Optional
+from typing import Optional, Tuple, Union, List
 
 
 class LMSolverConfig:
@@ -57,24 +57,28 @@ def batch_lm_solve(
     y_init: torch.Tensor,
     data,
     config: Optional[LMSolverConfig] = None,
+    debug_trajectory: bool = False,  # Added argument
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:  # Updated return type
     """
     GPU-optimized Levenberg-Marquardt solver - uses direct linear algebra.
-    
-    Key optimizations:
-    - Pre-allocated identity matrix (no recreation per iteration)
-    - Proper lambda broadcasting shape (B, 1, 1)
-    - Fused ReLU instead of torch.where
-    - Deferred convergence check to avoid CPU-GPU sync
-    - Numerical stability improvements
     """
+    # Clean kwargs to avoid passing debug_trajectory to Config
+    if "debug_trajectory" in kwargs:
+        kwargs.pop("debug_trajectory")
+
     if config is None:
         config = LMSolverConfig(**kwargs)
+
+    trajectory = []
 
     B, n = y_init.shape
     device, dtype = y_init.device, y_init.dtype
     y = y_init.clone()
+    
+    # Capture initial state
+    if debug_trajectory:
+        trajectory.append(y.detach().cpu().clone())
     
     # Pre-allocate identity matrix once (GPU optimization)
     eye_n = torch.eye(n, device=device, dtype=dtype).unsqueeze(0)  # (1, n, n)
@@ -83,11 +87,6 @@ def batch_lm_solve(
     lambdas = torch.full((B, 1, 1), config.damping_init, device=device, dtype=dtype)
     
     # Get constraint matrices
-    # For ZonotopeData: eq_resid = C @ y - d, ineq_resid = relu(A @ y - b)
-    # For PolytopeData: no eq constraints, ineq_resid = relu(A @ y - b)
-    # Jacobian of eq_resid is just C
-    # Jacobian of ineq_resid is A where A @ y > b
-    
     if hasattr(data, 'C') and data.C is not None:
         C = data.C  # (B, m_eq, n) - equality constraint matrix
         d = data.d  # (B, m_eq, 1) - equality constraint RHS
@@ -122,8 +121,6 @@ def batch_lm_solve(
         current_loss = 0.5 * (r ** 2).sum(dim=1, keepdim=True)  # (B, 1)
         
         # Build Jacobian analytically
-        # J_eq = C for equality constraints
-        # J_ineq = A where active, 0 elsewhere (efficient masking)
         A_masked = A * active_mask  # (B, m_ineq, n) - broadcast multiply
         if C is not None:
             J = torch.cat([C, A_masked], dim=1)  # (B, m, n)
@@ -168,6 +165,10 @@ def batch_lm_solve(
         improved = (new_loss < current_loss).squeeze(1)  # (B,)
         y = torch.where(improved.unsqueeze(1), y_new, y)
         
+        # Capture updated state
+        if debug_trajectory:
+            trajectory.append(y.detach().cpu().clone())
+
         # Update damping (vectorized, no CPU sync)
         lambdas = torch.where(
             improved.view(B, 1, 1),
@@ -176,11 +177,7 @@ def batch_lm_solve(
         )
         lambdas = torch.clamp(lambdas, min=1e-8, max=1e5)
         
-        # DEFERRED: convergence check removed to avoid .all() CPU-GPU sync
-        # Check only happens at the end or when verbose printing
-        
         if config.verbose and k % 2 == 0:
-            # Only sync for printing (when needed)
             print(f"Iter {k:3d}: loss = {current_loss.mean().item():.3e}, "
                   f"grad_norm = {JTr.abs().max().item():.3e}")
     
@@ -191,6 +188,8 @@ def batch_lm_solve(
         if final_loss < config.val_tol or final_grad < config.grad_tol:
             print(f"Converged: loss={final_loss:.3e}, grad={final_grad:.3e}")
     
+    if debug_trajectory:
+        return y, trajectory
     return y
 
 
@@ -199,14 +198,18 @@ def nondiff_lm_solve(
     y_init: torch.Tensor,
     data,
     config: Optional[LMSolverConfig] = None,
+    debug_trajectory: bool = False, # Added argument
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """Non-differentiable LM solver."""
+    if "debug_trajectory" in kwargs:
+        kwargs.pop("debug_trajectory")
+
     if config is None:
         config = LMSolverConfig(**kwargs)
     
     with torch.no_grad():
-        return batch_lm_solve(x, y_init, data, config)
+        return batch_lm_solve(x, y_init, data, config, debug_trajectory=debug_trajectory)
 
 
 def hybrid_lm_solve(
@@ -215,16 +218,20 @@ def hybrid_lm_solve(
     data,
     max_diff_iter: int = 5,
     config: Optional[LMSolverConfig] = None,
+    debug_trajectory: bool = False, # Added argument
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """
     Hybrid solver: differentiable LM warm-start + non-differentiable refinement.
-    
-    Uses actual Levenberg-Marquardt in differentiable phase for faster convergence.
     """
+    if "debug_trajectory" in kwargs:
+        kwargs.pop("debug_trajectory")
+
     if config is None:
         config = LMSolverConfig(**kwargs)
     
+    trajectory = []
+
     # Warm start with few differentiable LM iterations
     diff_config = LMSolverConfig(
         max_iter=max_diff_iter,
@@ -237,7 +244,12 @@ def hybrid_lm_solve(
     )
     
     # Run differentiable LM (keeps gradient graph)
-    y_warm = batch_lm_solve(x, y_init, data, diff_config)
+    # We capture trajectory here too if debugging
+    if debug_trajectory:
+        y_warm, traj_warm = batch_lm_solve(x, y_init, data, diff_config, debug_trajectory=True)
+        trajectory.extend(traj_warm)
+    else:
+        y_warm = batch_lm_solve(x, y_init, data, diff_config)
     
     # Refine with non-differentiable solver for remaining iterations
     remaining_config = LMSolverConfig(
@@ -250,10 +262,19 @@ def hybrid_lm_solve(
         verbose=config.verbose
     )
     
-    y_refined = nondiff_lm_solve(x, y_warm.detach(), data, remaining_config)
-    
-    # Connect gradient only through differentiable warm-start
-    return y_warm + (y_refined - y_warm).detach()
+    if debug_trajectory:
+        y_refined, traj_refined = nondiff_lm_solve(x, y_warm.detach(), data, remaining_config, debug_trajectory=True)
+        # Avoid duplicating the connection point if it exists
+        if len(trajectory) > 0 and len(traj_refined) > 0:
+             trajectory.extend(traj_refined[1:])
+        else:
+             trajectory.extend(traj_refined)
+        
+        final_action = y_warm + (y_refined - y_warm).detach()
+        return final_action, trajectory
+    else:
+        y_refined = nondiff_lm_solve(x, y_warm.detach(), data, remaining_config)
+        return y_warm + (y_refined - y_warm).detach()
 
 
 def torch_opt_solve(
