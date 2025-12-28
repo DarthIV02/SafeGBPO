@@ -23,7 +23,7 @@ class RayMaskConfig(SafeguardConfig):
     passthrough: bool = False
 
 @dataclass
-class FSNetConfig(SafeguardConfig): #TODO: fill default valueS
+class FSNetConfig(SafeguardConfig): 
     regularisation_coefficient: float = 0.1
 
     # FSNet genera solver config parameters
