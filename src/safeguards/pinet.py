@@ -3,7 +3,11 @@ from torch import Tensor
 from jaxtyping import Float, jaxtyped
 from beartype import beartype
 from dataclasses import dataclass
+from typing import Optional, Tuple, Any
 import time
+import os
+from torch.func import jacrev, vmap
+import torch.nn.functional as F
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -22,11 +26,13 @@ class HyperplaneConstraint:
     b: Tensor  # (B, m, 1)
     
     def __init__(self, A, b):
-        self.A = A.detach()
-        self.b = b.detach()
-
         with torch.no_grad():
-            self.Apinv = torch.linalg.pinv(self.A).detach()
+            Apinv = torch.linalg.pinv(A)
+            B, m, n = A.shape
+            self.P = torch.eye(n).expand(B, n, n) - torch.bmm(Apinv, A)
+            self.c = torch.bmm(Apinv, b)
+        self.P = self.P.detach()    
+        self.c = self.c.detach()
 
     def project(self, y: Tensor) -> Tensor:
         """
@@ -38,9 +44,7 @@ class HyperplaneConstraint:
         Returns:
             Projected tensor satisfying A x = b.
         """
-        correction = torch.bmm(self.A, y) - self.b
-        correction_proj = torch.bmm(self.Apinv, correction)
-        return y - correction_proj
+        return torch.bmm(self.P, y) + self.c
 
 @dataclass
 class BoxConstraint:
@@ -122,6 +126,7 @@ class PinetSafeguard(Safeguard):
 
         # Linear constraints A x <= b
         A, b = self.env.compute_A_b()
+
         if not self.save_dim:
             # Save frequently used variables
             Bbatch, m, D = A.shape
@@ -138,10 +143,8 @@ class PinetSafeguard(Safeguard):
             
             self.save_dim = True
 
-        self.pre_constraint_violation = torch.clamp(
-            torch.bmm(A, action) - b.unsqueeze(2),
-            min=0.0
-        ).square().sum(dim=1).squeeze(1)
+        x = torch.bmm(A, action) - b.unsqueeze(-1)
+        self.pre_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
 
         y_safe = self._run_projection(
             action=action,
@@ -149,10 +152,8 @@ class PinetSafeguard(Safeguard):
             b=b 
         )
 
-        self.post_constraint_violation = torch.clamp(
-            torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(2),
-            min=0.0
-        ).square().sum(dim=1).squeeze(1)
+        x = torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(-1)
+        self.post_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
 
         return y_safe
 
@@ -265,9 +266,11 @@ class _ProjectImplicitFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, yraw,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
+        
         sK = torch.zeros_like(yraw)
         with torch.no_grad():
             sK = step_iteration(sK, yraw, n_iter)
+
         y = step_final(sK).detach()
 
         ctx.save_for_backward(sK.clone().detach(), yraw.clone().detach())
