@@ -3,11 +3,7 @@ from torch import Tensor
 from jaxtyping import Float, jaxtyped
 from beartype import beartype
 from dataclasses import dataclass
-from typing import Optional, Tuple, Any
 import time
-import os
-from torch.func import jacrev, vmap
-import torch.nn.functional as F
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -165,8 +161,7 @@ class PinetSafeguard(Safeguard):
 
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
     
-    @torch.jit.script
-    def _run_admm(self, sk, y_raw, steps, sigma, omega, D):
+    def _run_admm(self, sk, y_raw, steps):
         D = self.action_dim
         sk_iter = sk.clone()
 
@@ -271,13 +266,8 @@ class _ProjectImplicitFn(torch.autograd.Function):
     def forward(ctx, yraw,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
         sK = torch.zeros_like(yraw)
-        start = time.time()
         with torch.no_grad():
             sK = step_iteration(sK, yraw, n_iter)
-        end_time = time.time()
-
-        print("ADMM pass took {:.6f} seconds".format(end_time - start))
-
         y = step_final(sK).detach()
 
         ctx.save_for_backward(sK.clone().detach(), yraw.clone().detach())
