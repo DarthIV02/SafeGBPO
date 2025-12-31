@@ -12,6 +12,7 @@ from conf.experiment import Experiment
 
 torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu") #  
 torch.set_default_dtype(torch.float64)
+torch.autograd.set_detect_anomaly(False)
 
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
     if trial is not None:
@@ -96,7 +97,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=None,
-                   interactions=60_000,
+                   interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -104,52 +105,68 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
-                   interactions=60_000,
+                   interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=False, polytopic_approximation=True),
-                   interactions=60_000,
+                   safeguard=RayMaskConfig(),
+                   interactions=100_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=RayMaskConfig(zonotopic_approximation=True),
+                   interactions=100_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(),
+                   safeguard=RayMaskConfig(polytopic_approximation=True),
+                   interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
         
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=FSNetConfig(),
-                   interactions=60_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(polytopic_approach=False),
                    safeguard=FSNetConfig(),
-                   interactions=60_000,
+                   interactions=100_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(polytopic_approach=True),
+                   safeguard=FSNetConfig(),
+                   interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=PinetConfig(),
-                   interactions=60_000,
+                   env=NavigateSeekerConfig(polytopic_approach=True),
+                   safeguard=PinetConfig(bwd_method="unroll", n_iter_admm=100),
+                   interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
-    ]
-
-    # this is for testing purposes only
-    experiment_queue = [
         Experiment(num_runs=1,
-                        learning_algorithm=SHACConfig(),
-                        env=NavigateSeekerConfig(),
-                        safeguard = FSNetConfig(),
-                        interactions=60_000,
-                        eval_freq=5_000,
-                        fast_eval=False),
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(polytopic_approach=True),
+                   safeguard=PinetConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5, fpi=False),
+                   interactions=100_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(polytopic_approach=True),
+                   safeguard=PinetConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5, fpi=True),
+                   interactions=100_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
     ]
 
     for i, experiment in enumerate(experiment_queue):
