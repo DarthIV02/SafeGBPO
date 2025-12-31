@@ -94,7 +94,6 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
             self.last_safe_action_set: sets.HPolytope = sets.HPolytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
                                                                      b=torch.zeros(self.num_envs, self.state_dim))
             self.shape = sets.HPolytope
-            print("Self.last_safe_action_set = Polytope")
 
     @jaxtyped(typechecker=beartype)
     def reset(self, seed: Optional[int] = None) -> tuple[
