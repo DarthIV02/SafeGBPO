@@ -5,8 +5,9 @@ description = "Repository to Leveraging Analytical Gradients for Provably Safe R
 requires-python = ">=3.12"
 dependencies = [
     "beartype>=0.21.0",
-    "cvxpy>=1.7.1",
+    "cvxpy>=1.7.3",
     "cvxpylayers>=0.1.9",
+    "diffcp==1.1.4",
     "gymnasium>=1.2.0",
     "imageio[ffmpeg]>=2.37.0",
     "jaxlib==0.8.2",
