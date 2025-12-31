@@ -218,6 +218,10 @@ class PinetJAXSafeguard(Safeguard):
         jax.config.update("jax_enable_x64", True)
         self.save_dim = False
 
+        if not self.env.polytope:
+            raise Exception("Polytope attribute has to be True")
+
+
     def safeguard(self, action: Tensor) -> Tensor:
         """
         Project an action onto the safe set.

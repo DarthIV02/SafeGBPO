@@ -100,6 +100,9 @@ class PinetSafeguard(Safeguard):
         self.fpi = fpi        
         self.save_dim = False
 
+        if not self.env.polytope:
+            raise Exception("Polytope attribute has to be True")
+
     def safeguard_metrics(self):
         return super().safeguard_metrics()  | {
             "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
