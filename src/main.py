@@ -126,6 +126,14 @@ if __name__ == "__main__":
 
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
+                   env=NavigateSeekerConfig(polytopic_approach=False),
+                   safeguard=FSNetConfig(),
+                   interactions=60_000,
+                   eval_freq=5_000,
+                   fast_eval=False),
+
+        Experiment(num_runs=1,
+                   learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=PinetConfig(),
                    interactions=60_000,
@@ -136,12 +144,12 @@ if __name__ == "__main__":
     # this is for testing purposes only
     experiment_queue = [
         Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=  FSNetConfig(),
-                   interactions=200_000,
-                   eval_freq=25_000,
-                   fast_eval=False),
+                        learning_algorithm=SHACConfig(),
+                        env=NavigateSeekerConfig(),
+                        safeguard = FSNetConfig(),
+                        interactions=60_000,
+                        eval_freq=5_000,
+                        fast_eval=False),
     ]
 
     for i, experiment in enumerate(experiment_queue):
