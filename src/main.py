@@ -116,7 +116,6 @@ if __name__ == "__main__":
                    interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
-
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),

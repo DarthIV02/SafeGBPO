@@ -59,7 +59,7 @@ class PPO(LearningAlgorithm):
         self.num_fits = num_fits
 
         self.buffer = CoupledBuffer(len_trajectories, self.env.num_envs, self.env.obs_dim, True,
-                                    self.env.action_dim, True, hasattr(self.env, "safe_actions"),
+                                    self.env.action_dim, True, hasattr(self.env, "safe_action"),
                                     self.batch_size, self.GAMMA, self.GAE_LAMBDA)
 
         reset_observations, info = self.env.reset()
@@ -161,7 +161,7 @@ class PPO(LearningAlgorithm):
         if self.buffer.store_safe_actions:
             # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
             #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
-            policy_loss += self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss += self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         self.policy_optim.zero_grad()
         policy_loss.backward()
