@@ -4,9 +4,10 @@ from abc import ABC, abstractmethod
 import torch
 from beartype import beartype
 from jaxtyping import jaxtyped
+from tqdm import tqdm
 
 from learning_algorithms.components.value_function import ValueFunction
-from src.learning_algorithms.components.policy import Policy
+from learning_algorithms.components.policy import Policy
 from envs.simulators.interfaces.simulator import Simulator
 
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.logger import Logger
 
+from tqdm import tqdm
 
 class LearningAlgorithm(ABC):
     """
@@ -64,6 +66,11 @@ class LearningAlgorithm(ABC):
             interactions: The number of environment interactions to use for learning.
             logger: The logger to use for logging learning progress.
         """
+
+        ## Yasin note: 
+        ## this is the main function where the training happens for the policy. 
+        ## only self._learn_episode is important here and its defined  by the respective learning_algortithm like ppo4
+
         num_learn_episodes = interactions // self.interactions_per_episode
 
         policy_lr_update = 0
@@ -73,7 +80,7 @@ class LearningAlgorithm(ABC):
         if self.VF_LEARNING_RATE_SCHEDULE == "linear":
             vf_lr_update = (1e-5 - self.value_function_optim.param_groups[0]["lr"]) / num_learn_episodes
 
-        for eps in range(num_learn_episodes):
+        for eps in tqdm(range(num_learn_episodes), desc="Learning", unit="episodes"):
             average_reward, policy_loss, value_loss = self._learn_episode(eps)
 
             for param_group in self.policy_optim.param_groups:
@@ -81,8 +88,10 @@ class LearningAlgorithm(ABC):
             for param_group in self.value_function_optim.param_groups:
                 param_group["lr"] += vf_lr_update
 
+            additional_metrics = self._learn_episode_additional_metrics()
             with torch.no_grad():
-                logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes)
+                if logger:
+                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
@@ -97,3 +106,14 @@ class LearningAlgorithm(ABC):
             Average reward, policy loss, and value loss for the episode.
         """
         pass
+
+    @jaxtyped(typechecker=beartype)
+    def _learn_episode_additional_metrics(self) -> dict[str, float]:
+        """
+        Get metrics for the learning algorithm.
+
+        Returns:
+            A dictionary of metrics.
+        """
+        return dict(getattr(self, '_last_episode_safeguard_metrics', {}))
+    

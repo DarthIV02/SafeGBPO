@@ -65,7 +65,7 @@ class SHAC(LearningAlgorithm):
         self.target_value_function = ValueFunction(self.env.obs_dim, **vf_kwargs)
 
         self.buffer = CoupledBuffer(len_trajectories + 1, self.env.num_envs, self.env.obs_dim, True,
-                                    self.env.action_dim, store_safe_actions=hasattr(self.env, "safe_actions"))
+                                    self.env.action_dim, store_safe_actions=hasattr(self.env, "safe_action"))
 
         reset_observation, info = self.env.reset()
         reset_value = self.target_value_function(reset_observation).squeeze(dim=1)
@@ -90,6 +90,7 @@ class SHAC(LearningAlgorithm):
         policy_loss = self.update_policy()
         value_loss = self.update_value_function()
         self.update_target_value_function()
+        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -114,7 +115,8 @@ class SHAC(LearningAlgorithm):
                 terminal = torch.ones_like(terminal)
 
             safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
-            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action)
+            safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
+            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             t += 1
             average_reward += reward.sum().item()
         return average_reward / self.env.num_envs / self.len_trajectories
@@ -128,10 +130,11 @@ class SHAC(LearningAlgorithm):
         Returns:
             The policy loss
         """
+        
         exponent = torch.arange(self.len_trajectories + 2).view(-1, 1).repeat(1, self.env.num_envs)
 
         for end, env in self.buffer.terminals.nonzero():
-            exponent[end + 1:, env] -= end + 1
+            exponent[end + 1:, env] = exponent[end + 1:, env] - (end + 1)
 
         discount = self.GAMMA ** exponent
         values = torch.where(self.buffer.terminals.tensor,
@@ -140,11 +143,24 @@ class SHAC(LearningAlgorithm):
         normalisation = self.env.num_envs * self.len_trajectories + self.buffer.terminals.count_nonzero()
 
         policy_loss = -(discount * values).sum() / normalisation
+
+        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
+
+        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
+        
+        ## Paper note: 
+        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
+        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
+        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
+        
         if self.buffer.store_safe_actions:
-            policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
-                self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
+            #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            safe_guard_loss = self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss = policy_loss + safe_guard_loss
 
         policy_loss.backward()
+        
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.MAX_GRAD_NORM)
         self.policy_optim.step()
 
@@ -247,5 +263,5 @@ class SHAC(LearningAlgorithm):
         """
         with torch.no_grad():
             for target_param, param in zip(self.target_value_function.parameters(), self.value_function.parameters()):
-                target_param.data.mul_(self.polyak_target)
-                target_param.data.add_((1 - self.polyak_target) * param.data)
+                # safer, no .data
+                target_param.copy_(target_param * self.polyak_target + param * (1 - self.polyak_target))

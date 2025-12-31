@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Arc
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Capsule(ConvexSet):
@@ -97,7 +97,7 @@ class Capsule(ConvexSet):
         Returns:
             A tensor of sampled points from the capsule.
         """
-        from src.sets.ball import Ball
+        from sets.ball import Ball
 
         t = torch.rand(self.start.shape[0], 1)
         line_samples = t * self.start + (1 - t) * self.end
@@ -115,7 +115,7 @@ class Capsule(ConvexSet):
         Returns:
             True if the point is contained in the capsule, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             closest_point = self.closest_point_on_line_segment(other)
@@ -134,6 +134,47 @@ class Capsule(ConvexSet):
         elif isinstance(other, sets.Zonotope):
             # Over approximation of the zonotope by a box to lower computational complexity
             return self.contains(other.box())
+        elif isinstance(other, sets.HPolytope):
+            # WARNING: Ask Tim here
+            """
+            Check in parallel if a batch of capsules intersects a polytope.
+            """
+            batch, dim = self.shape
+            epsilon = 1e-8,
+
+            # 1. Compute capsule line segment direction
+            dir_vec = self.end[0] - self.start[0]
+            segment_len = torch.norm(dir_vec, dim=1, keepdim=True)
+            # Avoid division by zero
+            dir_unit = dir_vec / (segment_len + 1e-8)
+
+            # 2. Cast rays from capsule start along segment direction
+            t_lower, t_upper = other.ray_hyperplane_intersections_parallel(
+                c=self.start[0],        # (batch, dim)
+                d=dir_unit,             # (batch, dim)
+                A=other.A,               # (num_hyperplanes, dim)
+                b=other.b,               # (num_hyperplanes,)
+                epsilon=epsilon
+            )
+
+            # 3. Check if line segment intersects polytope
+            # The segment is [0, segment_len], so intersection exists if:
+            intersects_line = (t_upper >= 0) & (t_lower <= segment_len.squeeze(1))
+
+            # 4. Compute closest approach distance if segment intersects partially
+            # Take t_clamped inside [0, segment_len] to compute closest point
+            t_clamped = torch.clamp(t_lower, min=0.0, max=segment_len.squeeze(1))
+            closest_point = capsule_start + dir_unit * t_clamped.unsqueeze(1)  # (batch, dim)
+
+            # 5. Distance from closest point to polytope along any violated hyperplane
+            violations = torch.matmul(closest_point, other.A.T) - other.b.unsqueeze(0)  # (batch, num_planes)
+            violations = torch.clamp(violations, min=0.0)
+            min_distance = torch.min(violations, dim=1).values  # smallest distance to hyperplanes
+
+            # 6. Capsule intersects if line intersects or distance <= radius
+            intersects = intersects_line | (min_distance <= capsule_radius)
+
+            return intersects
         else:
             raise NotImplementedError(
                 f"Containment check not implemented for {type(other)}")
@@ -149,7 +190,7 @@ class Capsule(ConvexSet):
         Returns:
             True if other intersects with the capsule, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)

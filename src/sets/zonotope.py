@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Zonotope(ConvexSet):
@@ -128,6 +128,14 @@ class Zonotope(ConvexSet):
         Returns:
             The constraints for the zonotope-zonotope containment problem.
         """
+
+        ## Paper note: Determining the containment of a zonotope in another
+        ## zonotope is co-NP complete [63], but a sufficient condition for Z1 ⊆ Z2 is [64, Eq. 15]
+        ## 1 ≥ min γ∈Rn2 ,Γ∈Rn2×n1  ||Γ γ||∞ (8a) 
+        ## subject to G1 = G2Γ (8b) 
+        ## c2 − c1 = G2γ . (8c)
+        ## Both containment problems are linear.
+
         weights = cp.Variable(g2.shape[1])
         mapping = cp.Variable((g2.shape[1], g1.shape[1]))
 
@@ -152,7 +160,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if the point is contained in the zonotope, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             weights = cp.Variable((self.batch_dim, self.num_gens))
@@ -249,7 +257,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if other intersects with the zonotope, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)
@@ -260,6 +268,37 @@ class Zonotope(ConvexSet):
         elif isinstance(other, sets.Zonotope):
             # Overapproximation
             return self.box().intersects(other.box())
+        elif isinstance(other, sets.Polytope):
+            # Check with TIM
+            batch, dim = self.center.shape
+            num_gens = self.generator.shape[1]
+
+            # 1. Compute the "radius" along each generator direction for overapproximation
+            z_radius = self.generator.abs().sum(dim=1)  # (batch, dim) conservative box overapproximation
+
+            # 2. Choose ray directions: from Zonotope center to Polytope center (or arbitrary inside Polytope)
+            poly_center = torch.zeros(dim, device=self.center.device)  # approximate polytope center as 0
+            ray_dir = poly_center.unsqueeze(0) - self.center            # (batch, dim)
+            ray_norm = torch.norm(ray_dir, dim=1, keepdim=True)
+            ray_unit = ray_dir / (ray_norm + 1e-8)                   # avoid division by zero
+
+            # 3. Compute intersections along each ray using the parallel function
+            t_lower, t_upper = ray_hyperplane_intersections_parallel(
+                c=self.center,
+                d=ray_unit,
+                A=other.A,
+                b=other.b,
+                epsilon=epsilon
+            )
+
+            # 4. Check if Zonotope extent along ray intersects polytope
+            # Approximate Zonotope as a line segment: [-z_radius_along_ray, z_radius_along_ray]
+            z_radius_along_ray = torch.sum(z_radius * ray_unit.abs(), dim=1)  # (batch,)
+
+            # Polytope intersects if its range along the ray overlaps with Zonotope extent
+            intersects = (t_upper + z_radius_along_ray >= 0) & (t_lower - z_radius_along_ray <= 0)
+            
+            return intersects
         else:
             raise NotImplementedError(
                 f"Intersection check not implemented for {type(other)}")
@@ -272,7 +311,7 @@ class Zonotope(ConvexSet):
         Returns:
             The smallest axis-aligned box enclosure of the zonotope.
         """
-        from src.sets import Box
+        from sets import Box
         return Box(self.center, self.generator.abs().sum(dim=2).diag_embed())
 
     def vertices(self) -> Float[Tensor, "{self.batch_dim} {self.dim} num_vert"]:
@@ -307,3 +346,90 @@ class Zonotope(ConvexSet):
         vert = torch.hstack([vert, lower_half])
 
         return self.center[0].unsqueeze(1) + vert
+
+
+    def setup_resid(self):
+        """
+        Setup the residuals for FSNet solver interface.
+        Constructs the A, b, C, d  constraint matrices for the zonotope representation.
+        specifically the point containment in the zonotope Z = { x | x = c + Gβ , ||β||∞ <= 1 }
+        where c is the center, G is the generator matrix, and β are the generator coefficients.
+        
+        The equality constraints are Cz = d with z = [y; β] and c is the center of the zonotope
+        The inequality constraints are Az <= b with z = [y; β] and b is the box constraints on β.
+
+        """
+
+        batch_dim, dim, num_generators = self.generator.shape
+
+        # for eq constraints Cz = d
+        # C with shape (batch_dim, dim, dim + num_generators)
+        # d with shape (batch_dim, dim, 1)
+        
+        self.C = torch.cat([
+                torch.eye(dim).expand(batch_dim, dim, dim), 
+                -self.generator
+            ], dim=2).detach() 
+        self.d = self.center.unsqueeze(2).detach() 
+        
+        # for ineq constraints  Az <= b
+        # A with shape (batch_dim, 2 * num_generators, dim + num_generators)
+        # b with shape (batch_dim, 2 * num_generators, 1)
+
+        A_half = torch.cat([
+                torch.zeros((batch_dim, num_generators, dim)),
+                torch.eye(num_generators).expand(batch_dim, num_generators, num_generators)
+            ], dim=2)
+        
+        self.A = torch.cat([A_half, -A_half], dim=1).detach()  
+        self.b = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
+
+    def pre_process_action(self, action):
+        """
+        
+        Pre-process the action to fit the zonotope representation. 
+        z = [a; gamma], where a is the action and gamma are the generator coefficients.
+        z has shape (batch_size, dim + num_generators)
+        Args:
+            action: The action to pre-process.
+        Returns:
+                The pre-processed action.
+            """
+        batch_dim, _, num_generators = self.generator.shape
+        z = torch.nn.functional.pad(action, (0, num_generators)) # to allow for backpropagation through actions outside the zonotope
+        return z
+    
+    def post_process_action(self, action):
+        """
+        Post-process the action to extract the original action from the zonotope representation.
+        z = [a; gamma], where a is the action and gamma are the generator coefficients
+        Args:
+            action: The action to post-process.
+        Returns:
+            The post-processed action.
+        """
+        return action[:, :self.dim]
+    
+    def eq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute the residual for equality constraints Cy = d.
+        X exist for compatibility with FSNet interface which can handle input dependent constraints.
+        Args:
+            X: Optional input tensor (not used in this method).
+            Y: The tensor to check against the equality constraints.
+        Returns:
+            The residual tensor for the equality constraints.
+        """
+        return self.C @ Y.unsqueeze(2) - self.d
+
+    def ineq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute the residual for inequality constraints Ay <= b.
+        X exist for compatibility with FSNet interface which can handle input dependent constraints.
+        Args:
+            X: Optional input tensor (not used in this method).
+            Y: The tensor to check against the inequality constraints.
+        Returns:
+            The residual tensor for the inequality constraints.
+        """
+        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)

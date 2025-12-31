@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Circle
 from torch import Tensor
 
-from src.sets.interface.convex_set import ConvexSet
+from sets.interface.convex_set import ConvexSet
 
 
 class Ball(ConvexSet):
@@ -88,7 +88,7 @@ class Ball(ConvexSet):
         Returns:
             True if the point is contained in the ball, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, Tensor):
             return torch.norm(other - self.center, dim=1) <= self.radius
@@ -120,7 +120,7 @@ class Ball(ConvexSet):
         Returns:
             True if other intersects with the ball, False otherwise.
         """
-        import src.sets as sets
+        import sets as sets
 
         if isinstance(other, sets.Ball):
             center_distance = torch.norm(other.center - self.center, dim=1)
@@ -150,3 +150,16 @@ class Ball(ConvexSet):
             support = (direction.unsqueeze(2) * other.generator).sum(dim=1).abs().sum(
                 dim=1)
             return self.intersects(other.box()) & (distance <= support + self.radius)
+        # CAUTION: NOT SURE HOW MATHEMATICALLY CORRECT THIS IS!!!!
+        elif isinstance(other, sets.HPolytope):
+            # Compute signed distances for each polytope in the batch
+            Ac = torch.einsum("bij, bj -> bi", other.A, self.center)  # (batch, num_constraints)
+            signed_dist = (Ac - other.b) / (torch.norm(other.A, dim=2) + 1e-8)
+
+            # If inside all constraints, intersection is true
+            inside_mask = torch.all(signed_dist <= 0, dim=1)
+
+            # Otherwise, check if the max violation is smaller than the radius
+            max_violation = torch.clamp(signed_dist, min=0).max(dim=1).values
+            return inside_mask | (max_violation <= self.radius)
+

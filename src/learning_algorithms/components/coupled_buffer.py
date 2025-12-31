@@ -6,7 +6,7 @@ from beartype import beartype
 from jaxtyping import Float, Bool, jaxtyped
 from torch import Tensor
 
-from src.learning_algorithms.components.coupled_tensor import CoupledTensor
+from learning_algorithms.components.coupled_tensor import CoupledTensor
 
 
 @dataclass
@@ -90,6 +90,7 @@ class CoupledBuffer:
         if self.gae_lambda is not None:
             self.advantages = CoupledTensor(self.len_trajectories + 1, self.num_envs)
         self.terminals = CoupledTensor(self.len_trajectories + 1, self.num_envs, dtype=torch.bool)
+        self.safeguard_metrics = []
 
     @jaxtyped(typechecker=beartype)
     def reset(self,
@@ -125,6 +126,7 @@ class CoupledBuffer:
         if self.gae_lambda is not None:
             self.advantages.reset()
         self.terminals.reset()
+        self.safeguard_metrics = []
 
         self.observations[0] = reset_observation
         if self.store_values:
@@ -139,7 +141,8 @@ class CoupledBuffer:
             value: Optional[Float[Tensor, "{self.num_envs}"]] = None,
             action: Optional[Float[Tensor, "{self.num_envs} {self.action_dim}"]] = None,
             log_prob: Optional[Float[Tensor, "{self.num_envs}"]] = None,
-            safe_action: Optional[Float[Tensor, "{self.num_envs} {self.action_dim}"]] = None
+            safe_action: Optional[Float[Tensor, "{self.num_envs} {self.action_dim}"]] = None,
+            safeguard_metrics: Optional[dict] = None
     ) -> None:
         """
         Add a new transition to the buffer
@@ -157,6 +160,10 @@ class CoupledBuffer:
             print("[BUFFER OVERFLOW] Overwriting oldest transitions")
             self.t[self.t >= self.len_trajectories] = 0
 
+        if safeguard_metrics is not None:
+            self.safeguard_metrics.append(safeguard_metrics)
+        else:
+            self.safeguard_metrics.append({})
         self.observations[self.t + 1] = observation
         if value is not None:
             self.values[self.t + 1] = value
@@ -170,6 +177,22 @@ class CoupledBuffer:
         self.terminals[self.t + 1] = terminal
 
         self.t = self.t + 1
+
+    def aggregate_safeguard_metrics(self) -> dict:
+        """
+        Compute the mean of each safeguard metric over the episode.
+        """
+        if not self.safeguard_metrics:
+            return {}
+        all_keys = set()
+        for m in self.safeguard_metrics:
+            all_keys.update(m.keys())
+        result = {}
+        for k in all_keys:
+            vals = [float(m[k]) for m in self.safeguard_metrics if k in m]
+            if vals:
+                result[k] = sum(vals) / len(vals)
+        return result
 
     @jaxtyped(typechecker=beartype)
     def calculate_advantages(self) -> None:

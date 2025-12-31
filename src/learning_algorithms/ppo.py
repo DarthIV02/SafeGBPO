@@ -4,7 +4,7 @@ from jaxtyping import jaxtyped
 
 from envs.simulators.interfaces.simulator import Simulator
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
-from src.learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
+from learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
 
 
 class PPO(LearningAlgorithm):
@@ -59,7 +59,7 @@ class PPO(LearningAlgorithm):
         self.num_fits = num_fits
 
         self.buffer = CoupledBuffer(len_trajectories, self.env.num_envs, self.env.obs_dim, True,
-                                    self.env.action_dim, True, hasattr(self.env, "safe_actions"),
+                                    self.env.action_dim, True, hasattr(self.env, "safe_action"),
                                     self.batch_size, self.GAMMA, self.GAE_LAMBDA)
 
         reset_observations, info = self.env.reset()
@@ -93,6 +93,7 @@ class PPO(LearningAlgorithm):
                     policy_loss = self.update_policy(batch)
                     value_loss = self.update_value_function(batch)
 
+        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -115,7 +116,8 @@ class PPO(LearningAlgorithm):
             terminal = terminated | truncated
 
             safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
-            self.buffer.add(observation, reward, terminal, value, action, log_prob, safe_action=safe_action)
+            safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
+            self.buffer.add(observation, reward, terminal, value, action, log_prob, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             average_reward += reward.sum().item()
         return average_reward / self.env.num_envs / self.len_trajectories
 
@@ -130,7 +132,7 @@ class PPO(LearningAlgorithm):
         Returns:
             The policy loss.
         """
-        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)
+        curr_log_prob = self.policy.log_prob(batch.actions, batch.observations)  
         entropy = self.policy.entropy()
 
         log_prob_diff = torch.clamp(curr_log_prob - batch.log_probs, min=-20, max=20)
@@ -145,9 +147,21 @@ class PPO(LearningAlgorithm):
                                                  1 - self.clip_coef,
                                                  1 + self.clip_coef)
         policy_loss = torch.max(loss, loss_clamped).mean() - self.ent_coef * entropy.mean()
+
+        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
+
+        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
+        
+        ## Paper note: 
+        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
+        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
+        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
+
+
         if self.buffer.store_safe_actions:
-            policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
-                self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
+            #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            policy_loss += self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         self.policy_optim.zero_grad()
         policy_loss.backward()

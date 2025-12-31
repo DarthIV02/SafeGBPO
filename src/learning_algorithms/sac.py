@@ -57,7 +57,7 @@ class SAC(LearningAlgorithm):
                          regularisation_coefficient, True)
         self.buffer = CoupledBuffer(buffer_size, self.env.num_envs, self.env.obs_dim, False,
                                     self.env.action_dim, batch_size=self.BATCH_SIZE,
-                                    store_safe_actions=hasattr(self.env, "safe_actions"))
+                                    store_safe_actions=hasattr(self.env, "safe_action"))
         self.polyak_target = polyak_target
         self.learning_starts = learning_starts
         self.policy_frequency = policy_frequency
@@ -104,6 +104,7 @@ class SAC(LearningAlgorithm):
             if eps % self.target_frequency == 0:
                 self.update_target()
 
+        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -127,7 +128,8 @@ class SAC(LearningAlgorithm):
         terminal = terminated | truncated
 
         safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
-        self.buffer.add(observation, reward, terminal, action=action, safe_action=safe_action)
+        safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
+        self.buffer.add(observation, reward, terminal, action=action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
 
         return reward.mean().item()
 
@@ -185,9 +187,20 @@ class SAC(LearningAlgorithm):
         min_value = torch.min(value1, value2)
 
         policy_loss = (self.alpha * log_probs - min_value).mean()
+
+        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
+
+        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
+        
+        ## Paper note: 
+        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
+        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
+        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
+        
         if self.buffer.store_safe_actions:
-            policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
-                self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
+            #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
+            policy_loss += self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
         self.policy_optim.zero_grad()
         policy_loss.backward()
         self.policy_optim.step()

@@ -8,7 +8,9 @@ from wandb.sdk.wandb_run import Run
 
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
 from envs.simulators.interfaces.simulator import Simulator
-
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates
+import time
+import psutil
 
 class Logger:
     """
@@ -47,13 +49,21 @@ class Logger:
         self.log_data = {}
         self.last_eval = 0
 
+        nvmlInit()
+        self.gpu_handle = nvmlDeviceGetHandleByIndex(0)
+        self.intermediate_time_train = time.time()
+        self.process = psutil.Process()  
+
+
+
     @jaxtyped(typechecker=beartype)
     def on_learning_episode(self,
                             eps: int,
                             average_reward: float,
                             policy_loss: float,
                             value_loss: float,
-                            num_learn_episodes: int):
+                            num_learn_episodes: int,
+                            additional_metrics: dict[str, float] = {}):
         """
         Callback call to log and evaluate.
 
@@ -64,6 +74,7 @@ class Logger:
             value_loss: The value loss
             num_learn_episodes: The total number of learning episodes
         """
+        self.log_performance()
         self.log_data["train/Average Reward"] = average_reward
         if hasattr(self.env, "interventions"):
             self.log_data["train/Interventions"] = self.env.interventions
@@ -71,6 +82,9 @@ class Logger:
             self.log_data[f"train/log(std_{i})"] = val
         self.log_data["train/Policy Loss"] = policy_loss
         self.log_data["train/Value Loss"] = value_loss
+
+        for key, value in additional_metrics.items():
+            self.log_data[f"train/{key}"] = value
 
         samples = eps * self.model.interactions_per_episode
         if samples - self.last_eval >= self.eval_freq or eps == num_learn_episodes - 1:
@@ -86,6 +100,7 @@ class Logger:
         if self.optuna_trial is not None and self.optuna_trial.should_prune():
             self.wandb_run.finish()
             raise TrialPruned()
+        self.intermediate_time_train = time.time()
 
     @jaxtyped(typechecker=beartype)
     def evaluate_policy(self, eps: int, num_learn_episodes: int) -> float:
@@ -105,8 +120,10 @@ class Logger:
         observation, info = self.eval_env.eval_reset()
         terminal = False
         steps = 0
+        self.intermediate_time_eval = time.time()
         while not terminal:
-            action = self.model.policy.predict(observation, deterministic=True)
+            action = self.model.policy.predict(observation, deterministic=True) # But unsafe action no?
+            
             observation, reward, terminated, truncated, info = self.eval_env.step(action)
             terminal = (terminated | truncated)[0].item()
             if record:
@@ -118,6 +135,11 @@ class Logger:
             steps += 1
 
         avg_eval_reward = eval_reward  / self.eval_env.num_envs / steps
+        
+        self.log_performance_eval()
+        if hasattr(self.eval_env, "safeguard_metrics"):
+            for key, value in self.eval_env.safeguard_metrics().items():
+                self.log_data[f"eval/{key}"] = value
 
         self.log_data["eval/Average Reward"] = avg_eval_reward
 
@@ -129,3 +151,23 @@ class Logger:
             self.best_reward = avg_eval_reward
 
         return avg_eval_reward
+
+
+    def log_performance(self):
+        gpu_util = nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+        cpu_util = psutil.cpu_percent(interval=None)
+        steps_per_sec =  self.model.interactions_per_episode / (time.time() - self.intermediate_time_train)
+        sec_per_episode = (time.time() - self.intermediate_time_train)
+        self.log_data["performance_train/seconds_per_episode"] = sec_per_episode
+        self.log_data["performance_train/steps_per_second"] = steps_per_sec
+        self.log_data["performance_train/gpu_utilization_mean"] = gpu_util
+        self.log_data["performance_train/cpu_utilization_mean"] = cpu_util
+
+    def log_performance_eval(self):
+        gpu_util = nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+        cpu_util = psutil.cpu_percent(interval=None)
+        sec_per_evaluation = (time.time() - self.intermediate_time_eval)
+        self.log_data["performance_eval/seconds_per_evaluation"] = sec_per_evaluation
+        self.log_data["performance_eval/gpu_utilization_mean"] = gpu_util
+        self.log_data["performance_eval/cpu_utilization_mean"] = cpu_util
+ 
