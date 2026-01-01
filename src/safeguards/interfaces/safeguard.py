@@ -84,11 +84,10 @@ class Safeguard(VectorActionWrapper, ABC):
         ## the state_set is the safe set defined by the enviroment. the projectable should then just be aboolean vector i guess that looks if we have to do the safeguard function
         
         ## Paper note: his makes it possible to replace any constraint on a safe action as,i ∈ As by the state constraint Si+1(as,i, si) ⊆ Ss.
-        projectable = self.env.state_set.intersects(reachable_set)
+        projectable = self.env.state_set.intersects(reachable_set) & hasattr(self.env, "boundary_projection") # Only skip on boundary projection
 
         ## Yasin note: this is where the model uses its safeguard optimisation like BP or Rays for actions outside the safe set
         safe_action = torch.where(projectable.unsqueeze(1), action, self.safeguard(action))
-
 
         if safe_action.isnan().any() or safe_action.isinf().any():
             raise ValueError(f"""

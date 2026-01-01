@@ -22,6 +22,7 @@ class BoundaryProjectionSafeguard(Safeguard):
         self.regularisation_coefficient = regularisation_coefficient
         self.boundary_layer = None
         self.num_interventions = 0
+        self.boundary_projection = True
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
