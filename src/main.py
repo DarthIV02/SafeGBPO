@@ -10,7 +10,7 @@ from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu") #  
+torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.float64)
 torch.autograd.set_detect_anomaly(False)
 
@@ -105,8 +105,8 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
-                   interactions=100_000,
-                   eval_freq=5_000,
+                   interactions=10_000,
+                   eval_freq=10,
                    fast_eval=False),
 
         Experiment(num_runs=1,

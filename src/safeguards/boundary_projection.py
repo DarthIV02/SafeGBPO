@@ -4,6 +4,7 @@ from beartype import beartype
 from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import Float, jaxtyped
 import torch
+import scipy.sparse as sp
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -97,9 +98,3 @@ class BoundaryProjectionSafeguard(Safeguard):
         """
         
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
-    
-    def safeguard_metrics(self):
-        """
-            Metrics to monitor the safeguard performance.
-        """
-        return super().safeguard_metrics()  

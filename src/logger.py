@@ -11,6 +11,7 @@ from envs.simulators.interfaces.simulator import Simulator
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates
 import time
 import psutil
+import sys
 
 class Logger:
     """
@@ -121,10 +122,23 @@ class Logger:
         terminal = False
         steps = 0
         self.intermediate_time_eval = time.time()
+
+        # If there is no safeguard -> at least check the pre and post violation
+        if not hasattr(self.eval_env, "safeguard_metrics"):
+            def safeguard_metrics():
+                return {
+                    "pre_eq_violation":     self.eval_env.pre_eq_violation,
+                    "pre_ineq_violation":   self.eval_env.pre_ineq_violation,
+                }
+            self.eval_env.safeguard_metrics = safeguard_metrics
+
+        store_violation = {"pre_eq": 0, "pre_ineq": 0, "post_eq": 0, "post_ineq": 0, "dif": 0}
+
         while not terminal:
-            action = self.model.policy.predict(observation, deterministic=True) # But unsafe action no?
+            action = self.model.policy.predict(observation, deterministic=True) # Unsafe action
             
-            observation, reward, terminated, truncated, info = self.eval_env.step(action)
+            observation, reward, terminated, truncated, info = self.eval_env.step(action) # Action becomes safe due to Gymnasium actions
+            
             terminal = (terminated | truncated)[0].item()
             if record:
                 frame = torchvision.utils.make_grid(torch.stack(self.eval_env.render()),
@@ -132,7 +146,29 @@ class Logger:
                 frames += [frame]
 
             eval_reward += reward.sum().item()
+
+            safe_action_set = self.eval_env.safe_action_set()
+            safe_action_set.setup_resid()
+            processed_action = safe_action_set.pre_process_action(action)
+            store_violation["pre_eq"] += safe_action_set.eq_resid(None, processed_action).square().mean().item()
+            store_violation["pre_ineq"] += safe_action_set.ineq_resid(None, processed_action).square().mean().item()
+            
+            if hasattr(self.eval_env, "safe_action"):
+                safe_action = self.eval_env.safe_action
+                processed_safe_action = safe_action_set.pre_process_action(safe_action)
+                store_violation["post_eq"] += safe_action_set.eq_resid(None, processed_safe_action).square().mean().item()
+                store_violation["post_ineq"] += safe_action_set.ineq_resid(None, processed_safe_action).square().mean().item()
+                store_violation["dif"] += torch.norm(safe_action - action, dim=1).mean().item()
+
             steps += 1
+
+        self.eval_env.pre_eq_violation = store_violation["pre_eq"] / steps
+        self.eval_env.pre_ineq_violation = store_violation["pre_ineq"] / steps
+        
+        if hasattr(self.eval_env, "safe_action"):
+            self.eval_env.post_eq_violation = store_violation["post_eq"] / steps
+            self.eval_env.post_ineq_violation = store_violation["post_ineq"] / steps
+            self.eval_env.dist_safe_action = store_violation["dif"] / steps
 
         avg_eval_reward = eval_reward  / self.eval_env.num_envs / steps
         

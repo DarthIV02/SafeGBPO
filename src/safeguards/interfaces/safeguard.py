@@ -57,10 +57,16 @@ class Safeguard(VectorActionWrapper, ABC):
         self.safe_action = None
         self.interventions = 0
 
+        self.pre_eq_violation = torch.Tensor([0])
+        self.pre_ineq_violation = torch.Tensor([0])
+        self.post_eq_violation = torch.Tensor([0])
+        self.post_ineq_violation = torch.Tensor([0])
+        self.dist_safe_action = torch.Tensor([0]) #torch.norm(self.safe_action - action, dim=1).mean().item()
 
     @jaxtyped(typechecker=beartype)
     def actions(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
             -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
+
         reachable_set = self.env.reachable_set()
 
         ### Yasin Tag: 
@@ -92,7 +98,6 @@ class Safeguard(VectorActionWrapper, ABC):
             """)
 
         self.safe_action = safe_action
-        self.dist_safe_action = torch.norm(self.safe_action - action, dim=1).mean().item()
         self.interventions += ((~torch.isclose(safe_action, action)).count_nonzero(dim=1) == self.action_dim).sum().item()
         return safe_action
 
@@ -128,7 +133,6 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
-    @abstractmethod
     def safeguard_metrics(self) -> dict[str, Any]:
         """
         Get metrics related to the safeguard.
@@ -136,7 +140,13 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             A dictionary of metrics.
         """
-        return {"dist_safe_action": self.dist_safe_action}
+        return {
+            "dist_safe_action":     self.dist_safe_action,
+            "pre_eq_violation":     self.pre_eq_violation,
+            "pre_ineq_violation":   self.pre_ineq_violation,
+            "post_eq_violation":    self.post_eq_violation,
+            "post_ineq_violation":  self.post_ineq_violation,
+        }
 
     @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \

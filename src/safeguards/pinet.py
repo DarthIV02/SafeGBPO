@@ -102,12 +102,6 @@ class PinetSafeguard(Safeguard):
 
         if not self.env.polytope:
             raise Exception("Polytope attribute has to be True")
-
-    def safeguard_metrics(self):
-        return super().safeguard_metrics()  | {
-            "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
-            "post_ineq_violation": self.post_constraint_violation.mean().item(),
-        }
     
     @jaxtyped(typechecker=beartype)
     def safeguard(
@@ -146,8 +140,8 @@ class PinetSafeguard(Safeguard):
             
             self.save_dim = True
 
-        x = torch.bmm(A, action) - b.unsqueeze(-1)
-        self.pre_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
+        #x = torch.bmm(A, action) - b.unsqueeze(-1)
+        #self.pre_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
 
         y_safe = self._run_projection(
             action=action,
@@ -155,8 +149,8 @@ class PinetSafeguard(Safeguard):
             b=b 
         )
 
-        x = torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(-1)
-        self.post_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
+        #x = torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(-1)
+        #self.post_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
 
         return y_safe
 

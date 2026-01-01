@@ -64,12 +64,6 @@ class RayMaskSafeguard(Safeguard):
         self.boundary_projection_safeguard = None
         self.implicit_zonotope_distance_layer = None
         self.regularisation_coefficient = regularisation_coefficient
-
-    def safeguard_metrics(self):
-        return  {
-            "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
-            "post_ineq_violation": self.post_constraint_violation.mean().item(),
-        }
     
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -98,7 +92,7 @@ class RayMaskSafeguard(Safeguard):
             safe_dist, feasible_dist = self.compute_distances(action, safe_center, self.env.safe_action_set().generator)
 
         action_dist = torch.linalg.vector_norm(action - safe_center, dim=1, ord=2, keepdim=True)
-        self.pre_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
+        #self.pre_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
         directions = (action - safe_center) / (action_dist + 1e-8)
 
         central = action_dist < 1e-8
@@ -108,8 +102,8 @@ class RayMaskSafeguard(Safeguard):
             safe_center + directions * self.radial_mapping(action_dist, safe_dist, feasible_dist)
         )
 
-        action_dist = torch.linalg.vector_norm(safe_action - safe_center, dim=1, ord=2, keepdim=True)
-        self.post_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
+        #action_dist = torch.linalg.vector_norm(safe_action - safe_center, dim=1, ord=2, keepdim=True)
+        #self.post_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
         
         return safe_action
 
@@ -442,9 +436,3 @@ class RayMaskSafeguard(Safeguard):
             The safeguard loss.
         """
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
-    
-    def safeguard_metrics(self):
-        """
-            Metrics to monitor the safeguard performance.
-        """
-        return super().safeguard_metrics() 
