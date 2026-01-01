@@ -61,6 +61,8 @@ class Safeguard(VectorActionWrapper, ABC):
         self.pre_ineq_violation = torch.Tensor([0])
         self.post_eq_violation = torch.Tensor([0])
         self.post_ineq_violation = torch.Tensor([0])
+        self.pre_constraint_violation = torch.Tensor([0])
+        self.post_constraint_violation = torch.Tensor([0])
         self.dist_safe_action = torch.Tensor([0]) #torch.norm(self.safe_action - action, dim=1).mean().item()
 
     @jaxtyped(typechecker=beartype)
@@ -146,6 +148,8 @@ class Safeguard(VectorActionWrapper, ABC):
             "pre_ineq_violation":   self.pre_ineq_violation,
             "post_eq_violation":    self.post_eq_violation,
             "post_ineq_violation":  self.post_ineq_violation,
+            "pre_contraint_violation": self.pre_constraint_violation,
+            "post_contraint_violation": self.post_constraint_violation
         }
 
     @jaxtyped(typechecker=beartype)

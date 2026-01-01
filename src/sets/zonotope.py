@@ -420,6 +420,7 @@ class Zonotope(ConvexSet):
         Returns:
             The residual tensor for the equality constraints.
         """
+
         return self.C @ Y.unsqueeze(2) - self.d
 
     def ineq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
@@ -433,3 +434,9 @@ class Zonotope(ConvexSet):
             The residual tensor for the inequality constraints.
         """
         return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
+    
+    def constraint_violation(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Return whichever function makes sense
+        """
+        return self.eq_resid(X, Y)

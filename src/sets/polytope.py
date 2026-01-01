@@ -435,3 +435,9 @@ class HPolytope(ConvexSet):
             Tensor of shape (batch_size, num_constraints) representing the violation amounts.
         """
         return torch.relu(self.A @ Y.unsqueeze(2) - self.b.unsqueeze(2)) 
+    
+    def constraint_violation(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
+        """
+        Return whichever function makes sense
+        """
+        return self.ineq_resid(X, Y)
