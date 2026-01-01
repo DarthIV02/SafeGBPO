@@ -105,8 +105,8 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
-                   interactions=10_000,
-                   eval_freq=10,
+                   interactions=100_000,
+                   eval_freq=5_000,
                    fast_eval=False),
 
         Experiment(num_runs=1,
