@@ -161,7 +161,7 @@ class Logger:
                 store_violation["post_eq"] += safe_action_set.eq_resid(None, processed_safe_action).square().mean().item()
                 store_violation["post_ineq"] += safe_action_set.ineq_resid(None, processed_safe_action).square().mean().item()
                 store_violation["dif"] += torch.norm(safe_action - action, dim=1).mean().item()
-                store_violation["post_cv"] += safe_action_set.constraint_violation(None, processed_action).square().mean().item()
+                store_violation["post_cv"] += safe_action_set.constraint_violation(None, processed_safe_action).square().mean().item()
 
             steps += 1
 
@@ -185,7 +185,7 @@ class Logger:
         self.log_data["eval/Average Reward"] = avg_eval_reward
 
         if record and frames[0].numel() != 0:
-            frames = torch.stack(frames).numpy()
+            frames = torch.stack(frames).cpu().numpy()
             self.log_data["eval/Video"] = wandb.Video(frames, fps=60, format="mp4")
 
         if avg_eval_reward > self.best_reward:

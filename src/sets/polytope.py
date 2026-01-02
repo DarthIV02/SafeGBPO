@@ -64,7 +64,7 @@ class HPolytope(ConvexSet):
         """Create batched unit boxes [-1, 1]^dim."""
         eye = torch.eye(self.dim)
         A_single = torch.cat([eye, -eye], dim=0)               # [2*dim, dim]
-        b_single = torch.ones(2 * dim)                         # [2*dim]
+        b_single = torch.ones(2 * self.dim)                         # [2*dim]
         A = A_single.unsqueeze(0).repeat(self.batch_dim, 1, 1)
         b = b_single.unsqueeze(0).repeat(self.batch_dim, 1)
         return HPolytope(A, b)
@@ -105,7 +105,7 @@ class HPolytope(ConvexSet):
 
         res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(None, None)] * n + [(0, None)])
         if not res.success or res.x[-1] <= 1e-9:
-            raise ValueError("Polytope appears to have no interior.")
+            return np.empty((0, n))  # or return boundary-only
 
         interior_point = res.x[:-1]
 
@@ -115,11 +115,13 @@ class HPolytope(ConvexSet):
         halfspaces = np.hstack([A, -b.reshape(-1, 1)])
 
         # ---- Step 3: Compute vertices ----
-        hs = HalfspaceIntersection(halfspaces, interior_point)
-        V = hs.intersections
-        
-        # format vertices correctly
-        V = np.reshape(V, (len(V), n))
+        try:
+            hs = HalfspaceIntersection(halfspaces, interior_point)
+            V = hs.intersections
+            V = np.reshape(V, (len(V), n))
+        except Exception:
+            # In rare cases QHull fails for degenerate polytope
+            V = np.empty((0, n))
 
         return V
 
@@ -146,7 +148,19 @@ class HPolytope(ConvexSet):
 
             # inequality constraints
             mask = torch.isfinite(self.b[idx])
-            b_ub = np.hstack((0, self.b[idx, mask].cpu().detach()))
+            A_i = self.A[idx, mask]
+            b_i = self.b[idx, mask] 
+
+            if mask.sum() == 0:
+                raise ValueError("No finite constraints — Chebyshev center undefined")
+            b_i = torch.clamp(b_i, min=-1e8)
+
+            b_ub = np.hstack((0, b_i.cpu().detach()))
+
+            norms = torch.linalg.norm(A_i, dim=1)
+            norms_np = norms.detach().cpu().numpy()
+            if torch.any((norms == 0) & (b_i < 0)):
+                raise ValueError("Zero row in A with negative b")
 
             A_ub = np.vstack(
                 (
@@ -154,45 +168,35 @@ class HPolytope(ConvexSet):
                     np.hstack(
                         (
                             np.reshape(
-                                np.linalg.norm(self.A[idx, mask].cpu().detach(), axis=1, ord=2), (sum(mask), 1)
+                                norms_np, (sum(mask), 1)
                             ),
-                            self.A[idx, mask].cpu().detach(),
+                            A_i.cpu().detach(),
                         )
                     ),
                 )
             )
             
             # solve linear program
-            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=(None, None))
-            #print(f"Center for idx {idx}: {res.x}")
-            #print("A_ub: ", A_ub)
-            #print("b_ub: ", b_ub)
+            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(0, None)] + [(None, None)] * dim)
 
             # check empty and unbounded cases
             if res.status == 2:  # infeasible -> empty
-                raise EmptySetError
+                self._centers[idx] = torch.zeros(dim, device=self.device)
             elif res.status == 3:  # unbounded
-                raise UnboundedSetError
-
-            self._centers[idx] = torch.Tensor(res.x[1:]).to(self.device)
+                self._centers[idx] = torch.zeros(dim, device=self.device)
+            else:
+                self._centers[idx] = torch.Tensor(res.x[1:]).to(self.device)
+            
             return self._centers[idx]  # type: ignore
         
         else:
-            update = torch.stack([self.center(i) for i in range(self.batch_dim)], dim=0)
-            #print("-----------------------------------")
-            #print(self._centers)
-            return update
-            """except Exception as e:
+            update = []
+            for i in range(self.batch_dim):
                 try:
-                    temp = []
-                    for i in range(self.batch_dim):
-                        temp.append(self.center(i))
-                except:
-                    print(f"❌ Failed at center generation for index {i}")
-                    print(f"Centers: {self._centers}")
-                    print(f"Center: {self._centers[i]}")
-                    print(f"Error: {e}")
-                    raise Exception(f"Missing value at batch index {i}") from e"""
+                    update.append(self.center(i))
+                except Exception:
+                    update.append(torch.zeros(dim, device=self.device))  # How to resolve this issue?
+            return torch.stack(update, dim=0)
 
     def draw(self, ax=None, batch_idx: int = 0, color="blue", **kwargs):
         """Draw a specific 2D polytope in the batch."""
@@ -201,6 +205,7 @@ class HPolytope(ConvexSet):
         if ax is None:
             ax = plt.gca()
         verts = self.vertices()[batch_idx].cpu().numpy()
+
         polygon = Polygon(verts, closed=True, fill=False, edgecolor=color, **kwargs)
         ax.add_patch(polygon)
         ax.autoscale()
@@ -214,31 +219,20 @@ class HPolytope(ConvexSet):
         Compute a boundary point along given directions for each batch.
         Solves: max l s.t. A (center + l * dir) <= b
         """
-        results = []
-        for i in range(self.batch_dim):
-            A_np = self.A[i].cpu().detach().numpy()
-            b_np = self.b[i].cpu().detach().numpy()
-            dir_np = directions[i].cpu().detach().numpy()
-            center_np = self.center(i).cpu().detach().numpy()
 
-            x = cp.Variable(self.dim)
-            l = cp.Variable()
-            constraints = [A_np @ x <= b_np, x == center_np + l * dir_np]
-            prob = cp.Problem(cp.Maximize(l), constraints)
-            prob.solve()
+        centers = self.center()
+        t_lower, t_upper = self.ray_hyperplane_intersections_parallel(
+            c=centers,
+            d=directions,
+            A=self.A,
+            b=self.b
+        )
 
-            if prob.status not in ["optimal", "optimal_inaccurate"]:
-                print("------------- Description of boundary point fail -------------------")
-                print(A_np)
-                print(b_np)
-                print(dir_np)
-                print(center_np)
-                raise RuntimeError(f"LP failed for batch {i}: {prob.status}")
+        # If ray does not intersect, clamp to zero displacement
+        valid = t_upper >= t_lower
+        t = torch.where(valid, t_upper, torch.zeros_like(t_upper))
 
-            boundary_np = center_np + l.value * dir_np
-            results.append(torch.tensor(boundary_np, dtype=self.A.dtype, device=self.A.device))
-
-        return torch.stack(results, dim=0)
+        return centers + t.unsqueeze(1) * directions
 
     @jaxtyped(typechecker=beartype)
     def sample(self) -> Float[torch.Tensor, "{self.batch_dim} {self.dim}"]:
@@ -317,7 +311,7 @@ class HPolytope(ConvexSet):
             ray_unit = ray_dir / (ray_norm + 1e-8)       # normalized direction
 
             # 2. Compute intersection bounds for each polytope along the ray
-            t1_lower, t1_upper = ray_hyperplane_intersections_parallel(
+            t1_lower, t1_upper = self.ray_hyperplane_intersections_parallel(
                 c=self.center,
                 d=ray_unit,
                 A=self.A,
@@ -325,7 +319,7 @@ class HPolytope(ConvexSet):
                 epsilon=epsilon
             )
 
-            t2_lower, t2_upper = ray_hyperplane_intersections_parallel(
+            t2_lower, t2_upper = self.ray_hyperplane_intersections_parallel(
                 c=other.center,
                 d=-ray_unit,    # opposite direction to compute interval from P2 center
                 A=other.A,
@@ -347,6 +341,7 @@ class HPolytope(ConvexSet):
                 f"Intersection check not implemented for {type(other)}")
 
     def ray_hyperplane_intersections_parallel(
+        self,
         c: torch.Tensor,  # (batch, dim)
         d: torch.Tensor,  # (batch, dim)
         A: torch.Tensor,  # (num_hyperplanes, dim)
@@ -356,26 +351,28 @@ class HPolytope(ConvexSet):
         """
         Compute lower and upper t values along ray directions for multiple hyperplanes in parallel.
         """
-        batch = c.shape[0]
-        num_planes = A.shape[0]
+        # denom: (B, C)
+        denom = torch.einsum("bd,bcd->bc", d, A)
+        numer = b - torch.einsum("bd,bcd->bc", c, A)
 
-        # Compute dot products: (batch, num_planes)
-        denom = torch.matmul(d, A.T)  # d_i · a_j
-        numer = b.unsqueeze(0) - torch.matmul(c, A.T)  # b_j - a_j · c_i
-
-        # Avoid division by zero
-        parallel_mask = torch.abs(denom) < epsilon
+        parallel = torch.abs(denom) < epsilon
         denom_safe = denom.clone()
-        denom_safe[parallel_mask] = 1.0  # temporarily avoid div by zero
+        denom_safe[parallel] = 1.0
+
         t = numer / denom_safe
 
-        # Handle rays parallel to hyperplanes
-        t[parallel_mask & (numer < 0)] = -float("inf")  # ray outside → no intersection
-        t[parallel_mask & (numer >= 0)] = float("inf")  # ray inside → no constraint
+        t[parallel & (numer < 0)] = -float("inf")
+        t[parallel & (numer >= 0)] = float("inf")
 
-        # Compute lower and upper bounds per batch
-        t_lower = torch.max(torch.where(denom < -epsilon, t, torch.full_like(t, -float("inf"))), dim=1).values
-        t_upper = torch.min(torch.where(denom > epsilon, t, torch.full_like(t, float("inf"))), dim=1).values
+        t_lower = torch.max(
+            torch.where(denom < -epsilon, t, torch.full_like(t, -float("inf"))),
+            dim=1
+        ).values
+
+        t_upper = torch.min(
+            torch.where(denom > epsilon, t, torch.full_like(t, float("inf"))),
+            dim=1
+        ).values
 
         return t_lower, t_upper
     

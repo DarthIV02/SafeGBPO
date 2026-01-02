@@ -125,7 +125,7 @@ if __name__ == "__main__":
                    fast_eval=False),
         Experiment(num_runs=1,
                    learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
+                   env=NavigateSeekerConfig(polytopic_approach=True),
                    safeguard=RayMaskConfig(polytopic_approximation=True),
                    interactions=100_000,
                    eval_freq=5_000,

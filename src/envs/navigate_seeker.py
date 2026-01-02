@@ -401,6 +401,10 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     draw_set._centers[0] = None
                     result = draw_set.vertices()
 
+                    if result.shape[0] == 0:
+                        frames.append(torch.zeros(3, self.SCREEN_HEIGHT, self.SCREEN_WIDTH, dtype=torch.uint8))
+                        continue
+
                     try:
                         vertices, mask = result       # function returned 2 values
                         vertices = vertices[mask].cpu().numpy()
@@ -540,78 +544,74 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         return unscaled_generator * length.unsqueeze(1)
 
     @jaxtyped(typechecker=beartype)
-    def compute_A_b(self) -> tuple[Float[Tensor, "batch_dim num_constraints dim"], Float[Tensor, "batch_dim num_constraints"]
-    ]:
-
+    def compute_A_b(
+        self
+    ) -> tuple[Float[Tensor, "batch_dim num_constraints dim"], Float[Tensor, "batch_dim num_constraints"]]:
+        """
+        Compute the safe input set polytope for a batch of environments based on acorl repo (envs.constraints.seeker.compute_relevant_input_set()).
+        Returns A, b for each batch: { x | A x <= b }.
+        """
         batch = self.num_envs
         dim = self.state_dim
+        asi = self.action_set.generator[0].diag()  # action limit per dimension
 
-        agent_position = self.state
-        noise = self.noise_set.sample()
-
+        agent_pos = self.state            # (B, dim)
+        noise = self.noise_set.sample()   # (B, dim)
+        
         # ----- Boundary constraints -----
         boundary_size = (self.state_set.max - self.state_set.min) / 2
-
-        b_upper = boundary_size - agent_position               # (B, dim)
-        b_lower = boundary_size + agent_position               # (B, dim)
-        b_boundary = torch.cat([b_upper, b_lower], dim=1)      # (B, 2*dim)
+        b_upper = boundary_size - agent_pos
+        b_lower = boundary_size + agent_pos
+        b_boundary = torch.cat([b_upper, b_lower], dim=1)   # (B, 2*dim)
 
         I = torch.eye(dim, device=self.state.device)
-        A_boundary_single = torch.cat([I, -I], dim=0)          # (2*dim, dim)
+        A_boundary_single = torch.cat([I, -I], dim=0)       # (2*dim, dim)
         A_boundary = A_boundary_single.unsqueeze(0).repeat(batch, 1, 1)
 
         # ----- Action constraints -----
-        asi = self.action_set.generator[0].diag()              # (dim,)
-        b_action = torch.cat([asi, asi], dim=0).repeat(batch, 1)   # (B, 2*dim) # Not sure for the asi thingy
-
-        A_action_single = torch.cat([-I, I], dim=0)                # (2*dim, dim)
+        b_action = torch.cat([asi, asi], dim=0).unsqueeze(0).repeat(batch, 1)  # (B, 2*dim)
+        A_action_single = torch.cat([-I, I], dim=0)                            # (2*dim, dim)
         A_action = A_action_single.unsqueeze(0).repeat(batch, 1, 1)
 
         # ----- Combine fixed constraints -----
         b_fixed = torch.cat([b_boundary, b_action], dim=1)     # (B, 4*dim)
         A_fixed = torch.cat([A_boundary, A_action], dim=1)     # (B, 4*dim, dim)
 
-        # ----- Obstacle constraints (Depends on each environment) -----
-
-        # Compute max number of obstacle constraints per batch
+        # ----- Obstacle constraints -----
         max_obs_constraints = self.obstacle_centers.tensor.shape[0]
-
-        # Prepare padded tensors
         total_constraints = 4*dim + max_obs_constraints
+
         A_padded = torch.zeros(batch, total_constraints, dim, device=self.state.device)
-        # Padding with inf so that it can return as a complete tensor
-        b_padded = torch.full((batch, total_constraints), float('inf'), device=self.state.device) 
+        b_padded = torch.full((batch, total_constraints), float('inf'), device=self.state.device)
 
         # Copy fixed constraints
         A_padded[:, :4*dim, :] = A_fixed
         b_padded[:, :4*dim] = b_fixed
 
-        # Fill obstacle constraints
-        for b in range(batch):
+        threshold = (torch.sqrt(torch.tensor(dim, device=self.state.device)) * (asi[0] + noise[:, 0])).unsqueeze(1)
+
+        for b_idx in range(batch):
             obs_idx = 4*dim
             for c in range(max_obs_constraints):
-                center = self.obstacle_centers.tensor[c, b]
-                radius = float(self.obstacle_radii.tensor[c, b])
-                dist = torch.linalg.norm(center - agent_position[b])
-                threshold = np.sqrt(dim) * (asi[0] + noise[b, 0])
-
-                if dist - radius > threshold:
-                    continue
-
-                b_obs, A_obs = self._halfspace_constraint(agent_position[b], center, radius)
-                A_padded[b, obs_idx, :] = A_obs
-                b_padded[b, obs_idx] = b_obs
+                center = self.obstacle_centers.tensor[c, b_idx]
+                radius = float(self.obstacle_radii.tensor[c, b_idx])
+                dist = torch.linalg.norm(center - agent_pos[b_idx])
+                
+                if dist - radius > threshold[b_idx]:
+                    # Obstacle too far; skip
+                    A_padded[b_idx, obs_idx, :] = 0
+                    b_padded[b_idx, obs_idx] = float('inf')
+                else:
+                    # Halfspace: a^T x <= b
+                    a = center - agent_pos[b_idx]
+                    norm_a = torch.linalg.norm(a)
+                    if norm_a < 1e-8:
+                        a_normalized = torch.zeros_like(a)
+                    else:
+                        a_normalized = a / norm_a
+                    b_val = dist - radius - noise[b_idx, 0]  # subtract noise like NumPy version
+                    A_padded[b_idx, obs_idx, :] = a_normalized
+                    b_padded[b_idx, obs_idx] = b_val
                 obs_idx += 1
 
         return A_padded, b_padded
-
-    @jaxtyped(typechecker=beartype)
-    def _halfspace_constraint(
-        self, agent_position: Float[Tensor, "{self.action_dim}"], obstacle_position: Float[Tensor, "{self.action_dim}"], obstacle_radius: float
-    ):
-        a = obstacle_position - agent_position
-        a = a / torch.linalg.norm(a)
-        b = torch.linalg.norm(obstacle_position - agent_position)
-        b = b - obstacle_radius 
-        #b -= self.env_config.noise
-        return b, a
