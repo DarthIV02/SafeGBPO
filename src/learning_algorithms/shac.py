@@ -71,6 +71,10 @@ class SHAC(LearningAlgorithm):
         reset_value = self.target_value_function(reset_observation).squeeze(dim=1)
         self.buffer.reset(reset_observation, reset_value)
 
+        self.viz_history = []
+        self.viz_interval = 2
+        self.fixed_test_obs = reset_observation[0:1].clone()
+
         self.interactions_per_episode = len_trajectories * self.env.num_envs
 
     @jaxtyped(typechecker=beartype)
@@ -91,6 +95,8 @@ class SHAC(LearningAlgorithm):
         value_loss = self.update_value_function()
         self.update_target_value_function()
         self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
+        if eps % self.viz_interval == 0:
+            self._capture_snapshot(eps)
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -280,3 +286,26 @@ class SHAC(LearningAlgorithm):
             for target_param, param in zip(self.target_value_function.parameters(), self.value_function.parameters()):
                 # safer, no .data
                 target_param.copy_(target_param * self.polyak_target + param * (1 - self.polyak_target))
+
+
+    def _capture_snapshot(self, episode_idx):
+        """現在のポリシーで固定観測に対する射影の様子を記録する"""
+        if not hasattr(self.env, "debug_mode"):
+            return
+
+        self.env.debug_mode = True
+        
+        with torch.no_grad():
+            obs = self.fixed_test_obs.expand(self.env.num_envs, -1)
+            
+            raw_action = self.policy(obs)
+            
+            self.env.step(raw_action)
+            
+            if hasattr(self.env, "get_visualization_data"):
+                data = self.env.get_visualization_data()
+                if data:
+                    data["episode"] = episode_idx
+                    self.viz_history.append(data)
+        
+        self.env.debug_mode = False

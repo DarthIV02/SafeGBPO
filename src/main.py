@@ -78,28 +78,39 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
 
     print("Capturing visualization data...")
 
+
+    # for caputre several action chunks
+    multi_step_data = []
+    
     obs, _ = env.reset()
 
-    unsafe_action_single = torch.tensor([2.0, 2.0], device=obs.device)
-    target_action = unsafe_action_single.unsqueeze(0).expand(env.num_envs, -1)
+    # unsafe_action_single = torch.tensor([2.0, 2.0], device=obs.device)
+    # target_action = unsafe_action_single.unsqueeze(0).expand(env.num_envs, -1)
 
     env.debug_mode = True 
-    
+
     with torch.no_grad():
-        _ = env.step(target_action)
+        for t in range(5):
+            action = agent.policy(obs)
+            
+            
+            obs, reward, terminated, truncated, info = env.step(action)
+            
+            if hasattr(env, "get_visualization_data"):
+                step_data = env.get_visualization_data()
+                if step_data is not None:
+                    step_data["step_idx"] = t 
+                    multi_step_data.append(step_data)
+
     env.debug_mode = False
 
-    if hasattr(env, "get_visualization_data"):
-        data = env.get_visualization_data()
-        
-        if data is None:
-            print(">>> [ERROR] Visualization data is None! Check if debug_mode worked.")
-        else:
-            torch.save(data, "projection_viz.pt")
-            print("Saved projection_viz.pt")
-            if 'trajectory' in data:
-                print(f"Captured trajectory steps: {len(data['trajectory'])}")
+    if multi_step_data:
+        torch.save(multi_step_data, "5_steps_viz.pt")
+        print(f"Saved 5_steps_viz.pt (Total steps: {len(multi_step_data)})")
+    else:
+        print("[ERROR] No data captured.")
 
+    
 
 
     return logger.best_reward
@@ -162,7 +173,7 @@ if __name__ == "__main__":
         learning_algorithm=SHACConfig(),
         env=NavigateSeekerConfig(),
         safeguard=FSNetConfig(),
-        interactions=100,
+        interactions=10000,
         eval_freq=1000,
         fast_eval=True
     )

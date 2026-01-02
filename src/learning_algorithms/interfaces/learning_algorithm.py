@@ -93,6 +93,10 @@ class LearningAlgorithm(ABC):
                 if logger:
                     logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
 
+            if hasattr(self, "viz_history") and self.viz_history:
+                torch.save(self.viz_history, "learning_evolution_viz.pt")
+                print(f"Saved learning history: {len(self.viz_history)} snapshots")
+
     @jaxtyped(typechecker=beartype)
     @abstractmethod
     def _learn_episode(self, eps: int) -> tuple[float, float, float]:
