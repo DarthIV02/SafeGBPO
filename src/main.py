@@ -10,8 +10,9 @@ from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu") # 
+torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.float64)
+torch.autograd.set_detect_anomaly(False)
 
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
     if trial is not None:

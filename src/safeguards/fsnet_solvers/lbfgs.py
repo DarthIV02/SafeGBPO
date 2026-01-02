@@ -88,7 +88,8 @@ class LBFGSConfig:
         c: float = 1e-4,
         rho_ls: float = 0.5,
         max_ls_iter: int = 10,
-        verbose: bool = False
+        verbose: bool = False,
+        **kwargs
     ):
         self.max_iter = max_iter
         self.memory = memory
@@ -232,6 +233,7 @@ def lbfgs_solve(
     return y
 
 
+
 def nondiff_lbfgs_solve(
     x: torch.Tensor,
     y_init: torch.Tensor,
@@ -241,42 +243,25 @@ def nondiff_lbfgs_solve(
     Y_hist: Optional[torch.Tensor] = None,
     hist_len: int = 0,
     hist_ptr: int = 0,
-    debug_trajectory: bool = False,
+    debug_trajectory: bool = False, # Visualization Arg
     **kwargs
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """
     Non-differentiable L‑BFGS solver that doesn't build backward graph.
-    
-    Parameters
-    ----------
-    y_init : torch.Tensor
-        Initial guess, shape (B, n)
-    x : torch.Tensor
-        Input data
-    data : object
-        Data object with eq_resid and ineq_resid methods
-    config : LBFGSConfig, optional
-        Configuration object
-    S_hist, Y_hist : torch.Tensor, optional
-        Pre-existing history buffers
-    hist_len, hist_ptr : int
-        History tracking variables
-    **kwargs
-        Additional parameters if config is not provided
-        
-    Returns
-    -------
-    torch.Tensor
-        Solution, shape (B, n)
     """
+    
+    # Avoid config errors
+    if "debug_trajectory" in kwargs:
+        kwargs.pop("debug_trajectory")
+
     if config is None:
         config = LBFGSConfig(**kwargs)
 
-    trajectory = []
-    
+    trajectory = [] # Init trajectory
+
     # Initialize without gradient tracking
     y = y_init.detach().clone().requires_grad_(True)
-
+    
     if debug_trajectory:
         trajectory.append(y.detach().cpu().clone())
 
@@ -320,6 +305,7 @@ def nondiff_lbfgs_solve(
         
         y_next = y + step * d
 
+        # Record trajectory
         if debug_trajectory:
             trajectory.append(y_next.detach().cpu().clone())
         
@@ -341,9 +327,10 @@ def nondiff_lbfgs_solve(
             print(f"Iter {k:3d}: f = {f_next.item()/config.scale:.3e}, "
                   f"|g| = {g_next.norm():.3e}, step = {step:.3e}")
 
-        if debug_trajectory:
-            return y, trajectory
-        return y
+    if debug_trajectory:
+        return y, trajectory
+        
+    return y
     
 
 

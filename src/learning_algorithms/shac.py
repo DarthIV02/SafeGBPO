@@ -65,7 +65,7 @@ class SHAC(LearningAlgorithm):
         self.target_value_function = ValueFunction(self.env.obs_dim, **vf_kwargs)
 
         self.buffer = CoupledBuffer(len_trajectories + 1, self.env.num_envs, self.env.obs_dim, True,
-                                    self.env.action_dim, store_safe_actions=hasattr(self.env, "safe_actions"))
+                                    self.env.action_dim, store_safe_actions=hasattr(self.env, "safe_action"))
 
         reset_observation, info = self.env.reset()
         reset_value = self.target_value_function(reset_observation).squeeze(dim=1)
@@ -177,7 +177,7 @@ class SHAC(LearningAlgorithm):
         if self.buffer.store_safe_actions:
             # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
             #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
-            safe_guard_loss = self.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            safe_guard_loss = self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
             policy_loss = policy_loss + safe_guard_loss
 
         policy_loss.backward()

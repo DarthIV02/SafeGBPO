@@ -4,6 +4,7 @@ from beartype import beartype
 from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import Float, jaxtyped
 import torch
+import scipy.sparse as sp
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
@@ -21,6 +22,7 @@ class BoundaryProjectionSafeguard(Safeguard):
         self.regularisation_coefficient = regularisation_coefficient
         self.boundary_layer = None
         self.num_interventions = 0
+        self.boundary_projection = True
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -85,7 +87,15 @@ class BoundaryProjectionSafeguard(Safeguard):
 
     def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+        """
+        Compute the safeguard loss for boundary projection as the MSE between the original and safeguarded actions.
+        
+        Args:
+            action: The original action before safeguarding.
+            safe_action: The safeguarded action.
+
+        Returns:
+            The safeguard loss.
+        """
+        
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
-    
-    def safeguard_metrics(self):
-        return super().safeguard_metrics()
