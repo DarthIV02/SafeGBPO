@@ -73,46 +73,43 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
 
     agent.learn(interactions=cfg.interactions, logger = logger)
 
-    # ----------------- LOGGER -------------------------
     run.finish()
     # ---------------------------------------------------------
 
-    print("Capturing visualization data...")
+    print("Capturing visualization data (Steps 20-25)...")
 
-
-    # for caputre several action chunks
     multi_step_data = []
     
     obs, _ = env.reset()
+    
+    print("Skipping first 20 steps...")
+    with torch.no_grad():
+        for _ in range(20):
+            action = agent.policy(obs)
+            obs, _, _, _, _ = env.step(action)
 
-    # unsafe_action_single = torch.tensor([2.0, 2.0], device=obs.device)
-    # target_action = unsafe_action_single.unsqueeze(0).expand(env.num_envs, -1)
-
-    env.debug_mode = True 
-
+    print("Recording steps 20 to 25...")
+    env.debug_mode = True
+    
     with torch.no_grad():
         for t in range(5):
             action = agent.policy(obs)
-            
             
             obs, reward, terminated, truncated, info = env.step(action)
             
             if hasattr(env, "get_visualization_data"):
                 step_data = env.get_visualization_data()
                 if step_data is not None:
-                    step_data["step_idx"] = t 
+                    step_data["step_idx"] = 20 + t
                     multi_step_data.append(step_data)
 
     env.debug_mode = False
 
     if multi_step_data:
         torch.save(multi_step_data, "5_steps_viz.pt")
-        print(f"Saved 5_steps_viz.pt (Total steps: {len(multi_step_data)})")
+        print(f"Saved 5_steps_viz.pt (Total frames: {len(multi_step_data)})")
     else:
         print("[ERROR] No data captured.")
-
-    
-
 
     return logger.best_reward
 
@@ -174,11 +171,23 @@ if __name__ == "__main__":
         learning_algorithm=SHACConfig(),
         env=NavigateSeekerConfig(),
         safeguard=FSNetConfig(),
-        interactions=10000,
+        interactions=2000,
         eval_freq=1000,
         fast_eval=True
-    )
+    ),
+
+        # Experiment(
+        #     num_runs=1,
+        #     learning_algorithm=SHACConfig(),
+        #     env=NavigateSeekerConfig(polytopic_approach=True),
+        #     safeguard=PinetConfig(), 
+        #     interactions=2000,
+        #     eval_freq=1000,
+        #     fast_eval=True
+        # )
     ]
+
+    
 
     # this is for testing purposes only
     # experiment_queue = [

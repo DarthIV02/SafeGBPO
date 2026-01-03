@@ -69,10 +69,11 @@ class FSNetSafeguard(Safeguard):
             self.solver = lbfgs_torch_solve  
             self.nondiff_solver = nondiff_lbfgs_torch_solve
 
-        # Visualization Flags (Added by Saida)
+        # Visualization Flags
         self.debug_mode = False
         self.last_trajectory = None
         self.last_unsafe_action = None
+        self.last_safe_set_info = {}
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -104,11 +105,9 @@ class FSNetSafeguard(Safeguard):
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad) for better backpropagation
 
+
         # --- Visualization Logic Start ---
         if self.debug_mode:
-            # When debugging, we MUST use the Python-based solver to capture the trajectory.
-            # Yasin's torch.opt solver does not support history tracking.
-            # We explicitly use 'nondiff_lbfgs_solve' imported from 'lbfgs.py'.
             from safeguards.fsnet_solvers.lbfgs import nondiff_lbfgs_solve as debug_solver
             
             with torch.enable_grad():
@@ -116,17 +115,31 @@ class FSNetSafeguard(Safeguard):
                     None,
                     processed_action,
                     self.data,
-                    debug_trajectory=True, # Flag for visualization
+                    debug_trajectory=True, 
                     **self.config_method
                 )
             
             if isinstance(result, tuple):
                 safe_action, trajectory = result
-                self.last_trajectory = trajectory
+                
+                self.last_trajectory = [self.data.post_process_action(t) for t in trajectory]
+                
                 self.last_unsafe_action = action.detach().cpu()
+                
             else:
                 safe_action = result
-        # --- Visualization Logic End ---
+                self.last_trajectory = [self.data.post_process_action(safe_action).detach().cpu()]
+
+            # Save Safe Set Info
+            if isinstance(self.data, Zonotope):
+                self.last_safe_set_info = {
+                    "safe_set_center": self.data.center.detach().cpu(),
+                    "safe_set_generators": self.data.generator.detach().cpu()
+                }
+            elif hasattr(self.data, "A"): 
+                 pass
+
+
 
         elif torch.is_grad_enabled():
             # Training phase: usually no debug needed, keep it fast
@@ -188,24 +201,14 @@ class FSNetSafeguard(Safeguard):
         }
 
     def get_visualization_data(self):
-        """Helper to extract data for plotting later."""
         if self.last_trajectory is None:
             return None
         
         traj_stack = torch.stack(self.last_trajectory).detach().cpu()
         unsafe_cpu = self.last_unsafe_action.detach().cpu()
 
-        safe_set_info = {}
-        try:
-            # Check for Zonotope structure
-            zonotope = self.env.safe_action_set()
-            safe_set_info["safe_set_center"] = zonotope.center.detach().cpu()
-            safe_set_info["safe_set_generators"] = zonotope.generator.detach().cpu()
-        except Exception:
-            pass
-
         return {
             "trajectory": traj_stack,
             "unsafe_action": unsafe_cpu,
-            **safe_set_info
+            **self.last_safe_set_info
         }

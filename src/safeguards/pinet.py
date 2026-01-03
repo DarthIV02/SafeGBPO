@@ -3,7 +3,7 @@ from torch import Tensor
 from jaxtyping import Float, jaxtyped
 from beartype import beartype
 from dataclasses import dataclass
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, List, Union
 import time
 import os
 from torch.func import jacrev, vmap
@@ -102,6 +102,12 @@ class PinetSafeguard(Safeguard):
 
         if not self.env.polytope:
             raise Exception("Polytope attribute has to be True")
+        
+        # --- Visualization Flags (Added) ---
+        self.debug_mode = False
+        self.last_trajectory = None
+        self.last_unsafe_action = None
+        self.last_safe_set_info = {} 
     
     @jaxtyped(typechecker=beartype)
     def safeguard(
@@ -119,7 +125,7 @@ class PinetSafeguard(Safeguard):
             Safeguarded action.
         """
 
-        action = action.unsqueeze(2)
+        action_lifted = action.unsqueeze(2)
 
         # Linear constraints A x <= b
         A, b = self.env.compute_A_b()
@@ -140,17 +146,34 @@ class PinetSafeguard(Safeguard):
             
             self.save_dim = True
 
-        #x = torch.bmm(A, action) - b.unsqueeze(-1)
-        #self.pre_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
+        # --- Visualization Logic ---
+        if self.debug_mode:
+            y_safe, trajectory_lifted = self._run_projection(
+                action=action_lifted,
+                A=A, 
+                b=b,
+                debug=True
+            )
+            
+            # 2. change coordinate (Step x Batch x ActionDim)
+            D = self.action_dim
+            self.last_trajectory = [t[:, :D, :].squeeze(2).detach().cpu() for t in trajectory_lifted]
+            self.last_unsafe_action = action.detach().cpu()
 
-        y_safe = self._run_projection(
-            action=action,
-            A=A, 
-            b=b 
-        )
+            # 3. save Safe Set (Polytope Ax<=b) 
+            # save A, b
+            self.last_safe_set_info = {
+                "safe_set_A": A.detach().cpu(),
+                "safe_set_b": b.detach().cpu()
+            }
 
-        #x = torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(-1)
-        #self.post_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
+        else:
+            y_safe = self._run_projection(
+                action=action_lifted,
+                A=A, 
+                b=b,
+                debug=False 
+            )
 
         return y_safe
 
@@ -159,14 +182,18 @@ class PinetSafeguard(Safeguard):
 
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
     
-    def _run_admm(self, sk, y_raw, steps):
+    def _run_admm(self, sk, y_raw, steps, debug=False):
         D = self.action_dim
         sk_iter = sk.clone()
+        trajectory = [] # For visualization
 
         y_raw_D = y_raw[:, :D, :]
         denom = 1 / (1 + 2 * self.sigma)
         addition = 2 * self.sigma * y_raw_D
         
+        if debug:
+            trajectory.append(sk_iter.detach().clone())
+
         for _ in range(steps):
             zk = self.eq.project(sk_iter)
             reflect = 2 * zk - sk_iter
@@ -175,6 +202,11 @@ class PinetSafeguard(Safeguard):
             tk = self.box.project(reflect)
             sk_iter = sk_iter + self.omega * (tk - zk)
 
+            if debug:
+                trajectory.append(sk_iter.detach().clone())
+
+        if debug:
+            return sk_iter, trajectory
         return sk_iter
 
     def _elevate(self, x: Tensor, A: Tensor) -> Tensor:
@@ -192,7 +224,8 @@ class PinetSafeguard(Safeguard):
         action: Tensor,         # (B, D, 1)
         A: Tensor,              # (B, m, D)
         b: Tensor,              # (B, m)
-    ) -> Tensor:
+        debug: bool = False
+    ) -> Union[Tensor, Tuple[Tensor, List[Tensor]]]:
         """
         Run ADMM projection with chosen backward method.
 
@@ -213,6 +246,19 @@ class PinetSafeguard(Safeguard):
         self.eq = HyperplaneConstraint(Aeq, self.beq)
         self.box = BoxConstraint(self.lb, ub)
 
+        # --- Visualization Logic (Force Unroll) ---
+        if debug:
+            y_safe, trajectory = self.project_unroll(
+                yraw = self._elevate(action, A),
+                step_iteration = self._run_admm,
+                step_final = self.eq.project,
+                og_dim = int(D),                 
+                n_iter = self.n_iter_admm,       
+                debug = True
+            )
+            return y_safe, trajectory
+
+        # --- Normal Logic ---
         if self.bwd_method == "implicit":
             y_safe = _ProjectImplicitFn.apply(
                 self._elevate(action, A),       # yraw
@@ -227,11 +273,12 @@ class PinetSafeguard(Safeguard):
         
         elif self.bwd_method == "unroll":
             y_safe = self.project_unroll(
-                yraw = self._elevate(action, A), # yraw
-                step_iteration = self._run_admm, # step_iteration
-                step_final = self.eq.project,    # step_final
-                og_dim = int(D),                 # og_dim
-                n_iter = self.n_iter_admm,       # n_iter
+                yraw = self._elevate(action, A), 
+                step_iteration = self._run_admm, 
+                step_final = self.eq.project,    
+                og_dim = int(D),                 
+                n_iter = self.n_iter_admm,       
+                debug = False
             )
         
         else:
@@ -240,18 +287,39 @@ class PinetSafeguard(Safeguard):
         return y_safe
 
     def project_unroll(self, yraw,
-                step_iteration, step_final, og_dim, n_iter, **kwargs):
+                step_iteration, step_final, og_dim, n_iter, debug=False, **kwargs):
 
         """
         Fully unrolled ADMM projection (autograd-tracked).
         """
         with torch.enable_grad():
             sK = torch.zeros_like(yraw, requires_grad=True)
-            sK = step_iteration(sK, yraw, n_iter)
+            
+            if debug:
+                sK, trajectory = step_iteration(sK, yraw, n_iter, debug=True)
+            else:
+                sK = step_iteration(sK, yraw, n_iter, debug=False)
+            
             y = step_final(sK)
             result = y[:, :og_dim].squeeze(2)
 
+        if debug:
+            return result, trajectory
         return result
+    
+    def get_visualization_data(self):
+        """Helper to extract data for plotting later."""
+        if self.last_trajectory is None:
+            return None
+        
+        traj_stack = torch.stack(self.last_trajectory)
+        unsafe_cpu = self.last_unsafe_action.detach().cpu()
+
+        return {
+            "trajectory": traj_stack,
+            "unsafe_action": unsafe_cpu,
+            **self.last_safe_set_info 
+        }
 
 class _ProjectImplicitFn(torch.autograd.Function):
 
@@ -266,7 +334,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
         
         sK = torch.zeros_like(yraw)
         with torch.no_grad():
-            sK = step_iteration(sK, yraw, n_iter)
+            sK = step_iteration(sK, yraw, n_iter) # Default debug=False
 
         y = step_final(sK).detach()
 
@@ -315,6 +383,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
       
         def iteration_vjp(v):
             with torch.enable_grad():
+                # debug=False implicitly
                 admm_plus = step_iteration(sK_bwd, yraw_bwd, 1)
             return torch.autograd.grad(
                 outputs=admm_plus,
@@ -335,6 +404,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
 
         def final_fn(y_in):
             with torch.enable_grad():
+                # debug=False implicitly
                 s = step_iteration(sK_bwd.detach(), y_in, 1)
             return step_final(s)
 
