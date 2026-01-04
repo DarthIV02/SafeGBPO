@@ -95,19 +95,32 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
         for t in range(5):
             action = agent.policy(obs)
             
+            if t == 0:
+                # 1. Create a single unsafe action [1, 2]
+                single_unsafe_action = torch.tensor([[2.0, 2.0]], device=action.device, dtype=torch.float64)
+                
+                # 2. Expand it to match the batch size (Batch, 2)
+                # obs.shape[0] is the batch_dim (likely 24)
+                action = single_unsafe_action.expand(obs.shape[0], -1)
+            
             obs, reward, terminated, truncated, info = env.step(action)
             
             if hasattr(env, "get_visualization_data"):
                 step_data = env.get_visualization_data()
                 if step_data is not None:
-                    step_data["step_idx"] = 20 + t
+                    step_data["step_idx"] = t  # 0スタートに変更
                     multi_step_data.append(step_data)
 
-    env.debug_mode = False
+    save_filename = "5_steps_viz.pt"
+    if cfg.safeguard:
+        if "Pinet" in cfg.safeguard.name:
+            save_filename = "pinet5_steps_viz.pt"
+        elif "FSNet" in cfg.safeguard.name:
+            save_filename = "fsnet5_steps_viz.pt"
 
     if multi_step_data:
-        torch.save(multi_step_data, "5_steps_viz.pt")
-        print(f"Saved 5_steps_viz.pt (Total frames: {len(multi_step_data)})")
+        torch.save(multi_step_data, save_filename)
+        print(f"Saved {save_filename} (Total frames: {len(multi_step_data)})")
     else:
         print("[ERROR] No data captured.")
 
@@ -151,31 +164,20 @@ if __name__ == "__main__":
         #            eval_freq=5_000,
         #            fast_eval=False),
         
-        # Experiment(num_runs=1,
-        #            learning_algorithm=SHACConfig(),
-        #            env=NavigateSeekerConfig(),
-        #            safeguard=FSNetConfig(),
-        #            interactions=60_000,
-        #            eval_freq=5_000,
-        #            fast_eval=False),
-
-        # Experiment(num_runs=1,
-        #            learning_algorithm=SHACConfig(),
-        #            env=NavigateSeekerConfig(),
-        #            safeguard=PinetConfig(),
-        #            interactions=60_000,
-        #            eval_freq=5_000,
-        #            fast_eval=False),
+        # --- FSNet ---
         Experiment(
-        num_runs=1,
-        learning_algorithm=SHACConfig(),
-        env=NavigateSeekerConfig(),
-        safeguard=FSNetConfig(),
-        interactions=2000,
-        eval_freq=1000,
-        fast_eval=True
-    ),
+            num_runs=1,
+            learning_algorithm=SHACConfig(),
+            env=NavigateSeekerConfig(),
+            safeguard=FSNetConfig(),
+            interactions=2000,
+            eval_freq=1000,
+            fast_eval=True
+        )
+        
+        # ,
 
+        # # --- PiNet ---
         # Experiment(
         #     num_runs=1,
         #     learning_algorithm=SHACConfig(),

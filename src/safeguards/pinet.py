@@ -1,15 +1,22 @@
+from typing import Self
+import cvxpy as cp
+from cvxpylayers.torch import CvxpyLayer
+import numpy as np
 import torch
-from torch import Tensor
-from jaxtyping import Float, jaxtyped
 from beartype import beartype
+from jaxtyping import jaxtyped, Float, Bool
+from torch import Tensor
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
+from scipy.optimize import linprog
+
+from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 from dataclasses import dataclass
 from typing import Optional, Tuple, Any, List, Union
 import time
 import os
 from torch.func import jacrev, vmap
 import torch.nn.functional as F
-
-from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
 ###########################################
 # Constraint primitives
@@ -103,7 +110,7 @@ class PinetSafeguard(Safeguard):
         if not self.env.polytope:
             raise Exception("Polytope attribute has to be True")
         
-        # --- Visualization Flags (Added) ---
+        # --- Visualization Flags ---
         self.debug_mode = False
         self.last_trajectory = None
         self.last_unsafe_action = None
@@ -161,7 +168,6 @@ class PinetSafeguard(Safeguard):
             self.last_unsafe_action = action.detach().cpu()
 
             # 3. save Safe Set (Polytope Ax<=b) 
-            # save A, b
             self.last_safe_set_info = {
                 "safe_set_A": A.detach().cpu(),
                 "safe_set_b": b.detach().cpu()
@@ -191,8 +197,10 @@ class PinetSafeguard(Safeguard):
         denom = 1 / (1 + 2 * self.sigma)
         addition = 2 * self.sigma * y_raw_D
         
+        # --- Visualization Fix: Save Init point ---
         if debug:
-            trajectory.append(sk_iter.detach().clone())
+            zk_init = self.eq.project(sk_iter)
+            trajectory.append(zk_init.detach().clone())
 
         for _ in range(steps):
             zk = self.eq.project(sk_iter)
@@ -203,7 +211,11 @@ class PinetSafeguard(Safeguard):
             sk_iter = sk_iter + self.omega * (tk - zk)
 
             if debug:
-                trajectory.append(sk_iter.detach().clone())
+                # --- Visualization Fix: Save zk (projected state) instead of sk ---
+                # This ensures the trajectory is in the correct coordinate space
+                # Update zk for visualization (since sk_iter changed)
+                zk_next = self.eq.project(sk_iter)
+                trajectory.append(zk_next.detach().clone())
 
         if debug:
             return sk_iter, trajectory
@@ -293,7 +305,10 @@ class PinetSafeguard(Safeguard):
         Fully unrolled ADMM projection (autograd-tracked).
         """
         with torch.enable_grad():
-            sK = torch.zeros_like(yraw, requires_grad=True)
+            # --- Algorithm Change: Warm Start (Critical for Visualization) ---
+            # Initialize with yraw (unsafe action) instead of zeros.
+            # This makes the trajectory start FROM the unsafe action.
+            sK = yraw.clone().requires_grad_(True)
             
             if debug:
                 sK, trajectory = step_iteration(sK, yraw, n_iter, debug=True)
@@ -332,7 +347,10 @@ class _ProjectImplicitFn(torch.autograd.Function):
     def forward(ctx, yraw,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
         
-        sK = torch.zeros_like(yraw)
+        # --- Fix applied here as well for consistency during training ---
+        # Initialize with yraw (Warm Start) to match project_unroll behavior
+        sK = yraw.clone() 
+        
         with torch.no_grad():
             sK = step_iteration(sK, yraw, n_iter) # Default debug=False
 

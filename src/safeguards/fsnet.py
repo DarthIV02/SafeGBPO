@@ -102,6 +102,16 @@ class FSNetSafeguard(Safeguard):
         self.pre_eq_violation = self.data.eq_resid(None, processed_action).square().sum(dim=1)
         self.pre_ineq_violation = self.data.ineq_resid(None, processed_action).square().sum(dim=1)
         
+        # --- Optimization: Check if actions are already safe ---
+        tol = 1e-6
+        is_safe_mask = (self.pre_eq_violation <= tol) & (self.pre_ineq_violation <= tol)
+        
+        # If all samples in the batch are safe, return immediately (unless debugging)
+        if is_safe_mask.all() and not self.debug_mode:
+             self.post_eq_violation = self.pre_eq_violation
+             self.post_ineq_violation = self.pre_ineq_violation
+             return action
+
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad) for better backpropagation
 
@@ -138,6 +148,7 @@ class FSNetSafeguard(Safeguard):
                 }
             elif hasattr(self.data, "A"): 
                  pass
+        # --- Visualization Logic End ---
 
 
 
@@ -164,6 +175,19 @@ class FSNetSafeguard(Safeguard):
 
         # return the safe action to original space
         safe_action = self.data.post_process_action(safe_action)
+
+        # --- Optimization: Restore originally safe actions ---
+        # Even if the solver ran, we overwrite the result with the original action if it was already safe.
+        # This prevents the solver from moving an already valid point due to numerical noise.
+        
+        # FIX: Removed .unsqueeze(1) because is_safe_mask is likely already [Batch, 1] due to sum(dim=1) behavior on [Batch, Const, 1]
+        if is_safe_mask.ndim == 1:
+            mask = is_safe_mask.unsqueeze(1).expand_as(action)
+        else:
+            mask = is_safe_mask.expand_as(action)
+            
+        safe_action = torch.where(mask, action, safe_action)
+
         return safe_action
 
     def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
