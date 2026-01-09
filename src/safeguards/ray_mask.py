@@ -359,7 +359,7 @@ class RayMaskSafeguard(Safeguard):
         Float[Tensor, "{self.batch_dim} 1"],
     ]:
         if self.boundary_projection_safeguard is None:
-            self.boundary_projection_safeguard = BoundaryProjectionSafeguard(self.env)
+            self.boundary_projection_safeguard = BoundaryProjectionSafeguard(self.env, self.regularisation_coefficient)
         if self.implicit_zonotope_distance_layer is None:
             direction = cp.Parameter(self.action_dim)
             starting_point = cp.Parameter(self.action_dim)
