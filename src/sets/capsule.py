@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Arc
 from torch import Tensor
 
-from sets.interface.convex_set import ConvexSet
+from src.sets.interface.convex_set import ConvexSet
 
 
 class Capsule(ConvexSet):

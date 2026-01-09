@@ -10,10 +10,10 @@ from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import jaxtyped, Float, Bool
 from torchvision.transforms.functional import to_tensor
 
-import sets as sets
+import src.sets as sets
 from envs.simulators.seeker import SeekerEnv
 from envs.interfaces.safe_action_env import SafeActionEnv
-from learning_algorithms.components.coupled_tensor import CoupledTensor
+from src.learning_algorithms.components.coupled_tensor import CoupledTensor
 
 
 class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
@@ -45,7 +45,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                  min_radius: float,
                  max_radius: float,
                  draw_safe_action_set: bool,
-                 polytopic_approach: bool,
+                 safe_action_polytope: bool,
                  ):
         """
         Initialize the NavigateSeekerEnv.
@@ -72,7 +72,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self.min_radius = min_radius
         self.max_radius = max_radius
         self.draw_safe_action_set = draw_safe_action_set
-        self.polytope = polytopic_approach
+        self.polytope = safe_action_polytope
 
         self.obstacles: list[sets.Ball] = [sets.Ball(torch.empty((num_envs, 2)), torch.empty(num_envs)) for _ in
                                            range(num_obstacles)]

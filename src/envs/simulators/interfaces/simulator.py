@@ -7,7 +7,7 @@ from beartype import beartype
 from gymnasium.vector import VectorEnv
 from jaxtyping import Float, Bool, jaxtyped
 
-import sets as sets
+import src.sets as sets
 import numpy as np
 
 class Simulator(ABC, VectorEnv):

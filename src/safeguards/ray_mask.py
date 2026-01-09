@@ -9,7 +9,7 @@ from jaxtyping import Float, jaxtyped
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 from safeguards.boundary_projection import BoundaryProjectionSafeguard
-import sets as sets
+import src.sets as sets
 
 
 @jaxtyped(typechecker=beartype)

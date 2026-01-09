@@ -5,8 +5,8 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 from torch import Tensor
 
-from sets.interface.convex_set import ConvexSet
-from sets.zonotope import Zonotope
+from src.sets.interface.convex_set import ConvexSet
+from src.sets.zonotope import Zonotope
 
 
 class Box(Zonotope):

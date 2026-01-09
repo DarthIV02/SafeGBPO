@@ -5,7 +5,7 @@ from beartype import beartype
 from jaxtyping import jaxtyped, Float
 from torch import Tensor
 
-import sets as sets
+import src.sets as sets
 from envs.simulators.cartpole import CartPoleEnv
 from envs.interfaces.safe_state_env import SafeStateEnv
 

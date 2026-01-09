@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 
-import sets as sets
+import src.sets as sets
 
 
 def basic_test(cvx_set: sets.ConvexSet):

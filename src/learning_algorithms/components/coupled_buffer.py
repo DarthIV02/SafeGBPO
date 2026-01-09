@@ -6,7 +6,7 @@ from beartype import beartype
 from jaxtyping import Float, Bool, jaxtyped
 from torch import Tensor
 
-from learning_algorithms.components.coupled_tensor import CoupledTensor
+from src.learning_algorithms.components.coupled_tensor import CoupledTensor
 
 
 @dataclass

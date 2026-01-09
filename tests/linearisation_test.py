@@ -1,6 +1,6 @@
 import torch
 
-from sets.box import Box
+from src.sets.box import Box
 from envs.simulators.pendulum import PendulumEnv
 from envs.simulators.household import HouseholdEnv
 

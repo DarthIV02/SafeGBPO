@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Circle
 from torch import Tensor
 
-from sets.interface.convex_set import ConvexSet
+from src.sets.interface.convex_set import ConvexSet
 
 
 class Ball(ConvexSet):

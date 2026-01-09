@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 from torch import Tensor
 
-from sets.interface.convex_set import ConvexSet
+from src.sets.interface.convex_set import ConvexSet
 
 
 class Zonotope(ConvexSet):
@@ -311,7 +311,7 @@ class Zonotope(ConvexSet):
         Returns:
             The smallest axis-aligned box enclosure of the zonotope.
         """
-        from sets import Box
+        from src.sets import Box
         return Box(self.center, self.generator.abs().sum(dim=2).diag_embed())
 
     def vertices(self) -> Float[Tensor, "{self.batch_dim} {self.dim} num_vert"]:
