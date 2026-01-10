@@ -85,7 +85,7 @@ class Box(Zonotope):
         Returns:
             True if the point is contained in the box, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, Tensor):
             center = other - self.center
@@ -118,7 +118,7 @@ class Box(Zonotope):
         Returns:
             True if other intersects with the box, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)
