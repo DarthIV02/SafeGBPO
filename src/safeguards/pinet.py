@@ -122,7 +122,7 @@ class PinetSafeguard(Safeguard):
         action = action.unsqueeze(2)
 
         # Linear constraints A x <= b
-        A, b = self.env.compute_A_b()
+        A, b = self.env.compute_polytope_generator()
 
         if not self.save_dim:
             # Save frequently used variables

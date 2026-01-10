@@ -532,7 +532,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         return unscaled_generator * length.unsqueeze(1)
 
     @jaxtyped(typechecker=beartype)
-    def compute_A_b(
+    def compute_polytope_generator(
         self
     ) -> tuple[Float[Tensor, "batch_dim num_constraints dim"], Float[Tensor, "batch_dim num_constraints"]]:
         """

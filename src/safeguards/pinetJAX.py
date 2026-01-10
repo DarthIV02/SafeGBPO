@@ -233,7 +233,7 @@ class PinetJAXSafeguard(Safeguard):
             Safeguarded action.
         """
         action = action.unsqueeze(2)
-        A, b = self.env.compute_A_b()
+        A, b = self.env.compute_polytope_generator()
 
         self.pre_constraint_violation = torch.clamp(
             torch.bmm(A, action) - b.unsqueeze(2),

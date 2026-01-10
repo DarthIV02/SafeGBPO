@@ -168,7 +168,7 @@ class RayMaskSafeguard(Safeguard):
         eps = 1e-6  # Minimum distance to avoid degeneracy
 
         # ----- Compute polytope constraints -----
-        A, b = self.env.compute_A_b()  # Shapes: (B, num_constraints, D), (B, num_constraints)
+        A, b = self.env.compute_polytope_generator()  # Shapes: (B, num_constraints, D), (B, num_constraints)
         A = torch.nan_to_num(A, nan=0.0, posinf=1e6, neginf=-1e6)
         b = torch.nan_to_num(b, nan=1e6, posinf=1e6, neginf=-1e6)
 
