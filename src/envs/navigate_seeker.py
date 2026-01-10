@@ -347,6 +347,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
     def render(self) -> list[Tensor]:
         """
         Render all environments.
+        For every action -> render is called.
 
         Returns:
             A list of rendered frames for each environment.
@@ -355,6 +356,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         goal = self.goal.detach().cpu()
 
         frames = []
+
+        # Restart the safe set
+        if self.draw_safe_action_set:
+            self.safe_action_set()
+
         for i in range(self.num_envs):
             img, draw = self.draw_seeker(state[i], goal[i])
 
@@ -375,16 +381,6 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                              fill=(0, 0, 0))
 
             if self.draw_safe_action_set:
-                # If invalid, recompute
-                if not hasattr(self, "last_safe_action_set") or self.last_safe_action_set is None:
-                    self.safe_action_set()
-                try:
-                    if self.last_safe_action_set.generator.sum() == 0:
-                        self.safe_action_set()
-                except:
-                    if self.last_safe_action_set.A.sum() == 0:
-                        self.safe_action_set()
-
                 overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
                 overlay_draw = ImageDraw.Draw(overlay)
                 
@@ -430,12 +426,6 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                 img = Image.alpha_composite(img, overlay)
 
             frames.append((to_tensor(img) * 255).to(torch.uint8))
-
-        # invalidate the cached safe state set
-        try:
-            self.last_safe_action_set.generator *= 0.0
-        except:
-            self.last_safe_action_set.A *= 0.0
 
         return frames
 

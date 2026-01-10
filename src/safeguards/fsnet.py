@@ -6,8 +6,8 @@ import torch
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
-from sets.polytope import HPolytope
-from sets.zonotope import Zonotope
+from src.sets.polytope import HPolytope
+from src.sets.zonotope import Zonotope
 
 from safeguards.fsnet_solvers.lbfgs import hybrid_lbfgs_solve, nondiff_lbfgs_solve #original file from FSNet codebase with kwargs extension
 from safeguards.fsnet_solvers.lbfgs_torch_opt import lbfgs_torch_solve, nondiff_lbfgs_torch_solve # PyTorch implementation of LBFGS solver for FSNet
