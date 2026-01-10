@@ -1,6 +1,4 @@
 from typing import Self
-import cvxpy as cp
-from cvxpylayers.torch import CvxpyLayer
 import numpy as np
 import torch
 from beartype import beartype
@@ -86,18 +84,14 @@ class HPolytope(ConvexSet):
         return self.contains_point(points)
 
     def vertices(self) -> np.array:
-        # obtain minimal representation
         A = np.asarray(self.A[0].cpu())
         b = np.asarray(self.b[0].cpu())
-
-        # ---- Step 1: Find an interior point by maximizing slack ----
         n = self.dim
 
         # Variables: x (n dims) and t (slack)
         c = np.zeros(n + 1)
         c[-1] = -1  # maximize t -> minimize -t
 
-        # A x + t <= b  ->  [A | 1] @ [x, t] <= b
         b_ub = b[np.isfinite(b)]
         unpadded_shape = b_ub.shape[0]
 
@@ -108,13 +102,8 @@ class HPolytope(ConvexSet):
             return np.empty((0, n))  # or return boundary-only
 
         interior_point = res.x[:-1]
-
-        # ---- Step 2: Build halfspaces for QHull ----
-        # QHull uses A x + b <= 0 convention, so convert:
-        # A x <= b  ->  A x - b <= 0
         halfspaces = np.hstack([A, -b.reshape(-1, 1)])
 
-        # ---- Step 3: Compute vertices ----
         try:
             hs = HalfspaceIntersection(halfspaces, interior_point)
             V = hs.intersections
@@ -146,7 +135,6 @@ class HPolytope(ConvexSet):
             # objective function
             c = np.hstack((-1, np.zeros(dim)))
 
-            # inequality constraints
             mask = torch.isfinite(self.b[idx])
             A_i = self.A[idx, mask]
             b_i = self.b[idx, mask] 
@@ -176,10 +164,8 @@ class HPolytope(ConvexSet):
                 )
             )
             
-            # solve linear program
             res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(0, None)] + [(None, None)] * dim)
 
-            # check empty and unbounded cases
             if res.status == 2:  # infeasible -> empty
                 self._centers[idx] = torch.zeros(dim, device=self.device)
             elif res.status == 3:  # unbounded
@@ -187,7 +173,7 @@ class HPolytope(ConvexSet):
             else:
                 self._centers[idx] = torch.Tensor(res.x[1:]).to(self.device)
             
-            return self._centers[idx]  # type: ignore
+            return self._centers[idx]
         
         else:
             update = []
@@ -241,20 +227,19 @@ class HPolytope(ConvexSet):
         """
         batch, num_constraints, dim = self.A.shape
 
-        # Start at center
         x = self.center()
 
         # Random direction per batch
-        dir_vec = torch.randn(batch, dim, device=device)
+        dir_vec = torch.randn(batch, dim, device=self.device)
         dir_vec = dir_vec / (torch.norm(dir_vec, dim=1, keepdim=True) + 1e-8)
 
         # Compute intersection bounds t_lower <= t <= t_upper
-        Ad = torch.einsum("bij, bj -> bi", self.A, dir_vec)          # (batch, num_constraints)
-        Ax = torch.einsum("bij, bj -> bi", self.A, x)                # (batch, num_constraints)
+        Ad = torch.einsum("bij, bj -> bi", self.A, dir_vec)
+        Ax = torch.einsum("bij, bj -> bi", self.A, x)
         c = self.b - Ax
 
-        t_lower = torch.full((batch,), -float("inf"), device=device)
-        t_upper = torch.full((batch,), float("inf"), device=device)
+        t_lower = torch.full((batch,), -float("inf"), device=self.device)
+        t_upper = torch.full((batch,), float("inf"), device=self.device)
 
         # For positive directions: A_i * dir > 0 → t ≤ (b_i - A_i x) / (A_i dir)
         pos_mask = Ad > 1e-8
@@ -271,8 +256,7 @@ class HPolytope(ConvexSet):
             dim=1
         ).values
 
-        # Sample t uniformly within [t_lower, t_upper]
-        t = torch.rand(batch, device=device) * (t_upper - t_lower) + t_lower
+        t = torch.rand(batch, device=self.device) * (t_upper - t_lower) + t_lower
 
         # New sampled point
         sample = x + t.unsqueeze(1) * dir_vec
@@ -305,12 +289,11 @@ class HPolytope(ConvexSet):
             batch, dim = self.center.shape # p1
             epsilon = 1e-8
 
-            # 1. Ray directions: from P1 center to P2 center
-            ray_dir = other.center - self.center               # (batch, dim)
+            ray_dir = other.center - self.center
             ray_norm = torch.norm(ray_dir, dim=1, keepdim=True)
-            ray_unit = ray_dir / (ray_norm + 1e-8)       # normalized direction
+            ray_unit = ray_dir / (ray_norm + 1e-8)
 
-            # 2. Compute intersection bounds for each polytope along the ray
+            # Compute intersection bounds for each polytope along the ray
             t1_lower, t1_upper = self.ray_hyperplane_intersections_parallel(
                 c=self.center,
                 d=ray_unit,
@@ -321,7 +304,7 @@ class HPolytope(ConvexSet):
 
             t2_lower, t2_upper = self.ray_hyperplane_intersections_parallel(
                 c=other.center,
-                d=-ray_unit,    # opposite direction to compute interval from P2 center
+                d=-ray_unit,
                 A=other.A,
                 b=other.b,
                 epsilon=epsilon
@@ -331,7 +314,7 @@ class HPolytope(ConvexSet):
             t2_lower_shifted = -t2_upper
             t2_upper_shifted = -t2_lower
 
-            # 3. Check interval overlap
+            # Check interval overlap
             intersects = (t1_upper >= t2_lower_shifted) & (t2_upper_shifted >= t1_lower)
             
             return intersects
@@ -342,16 +325,15 @@ class HPolytope(ConvexSet):
 
     def ray_hyperplane_intersections_parallel(
         self,
-        c: torch.Tensor,  # (batch, dim)
-        d: torch.Tensor,  # (batch, dim)
-        A: torch.Tensor,  # (num_hyperplanes, dim)
-        b: torch.Tensor,  # (num_hyperplanes,)
+        c: torch.Tensor,
+        d: torch.Tensor,
+        A: torch.Tensor,
+        b: torch.Tensor,
         epsilon: float = 1e-8
     ):
         """
         Compute lower and upper t values along ray directions for multiple hyperplanes in parallel.
         """
-        # denom: (B, C)
         denom = torch.einsum("bd,bcd->bc", d, A)
         numer = b - torch.einsum("bd,bcd->bc", c, A)
 

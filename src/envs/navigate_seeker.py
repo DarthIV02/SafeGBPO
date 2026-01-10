@@ -385,11 +385,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                 overlay_draw = ImageDraw.Draw(overlay)
                 
                 if self.safe_action_polytope:
-                    A_i = self.last_safe_action_set.A[i]          # (num_constraints, dim)
-                    b_i = self.last_safe_action_set.b[i]          # (num_constraints,)
-                    s_i = self.state[i]                            # (dim,)
+                    A_i = self.last_safe_action_set.A[i]
+                    b_i = self.last_safe_action_set.b[i]
+                    s_i = self.state[i]
 
-                    b_shifted = (b_i + torch.matmul(A_i, s_i))                  # (num_constraints,)
+                    b_shifted = (b_i + torch.matmul(A_i, s_i))
                     draw_set = sets.HPolytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
@@ -400,13 +400,12 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                         continue
 
                     try:
-                        vertices, mask = result       # function returned 2 values
+                        vertices, mask = result
                         vertices = vertices[mask].cpu().numpy()
                     except ValueError:
-                        vertices = result             # function returned only 1 value
+                        vertices = result
                         mask = None
 
-                    # Order CCW so polygon can be drawn without self-crossing
                     vertices = self.order_vertices_ccw(vertices).T
 
                 else:
@@ -430,11 +429,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         return frames
 
     def order_vertices_ccw(self, points):
-        # If points are (2, N), transpose to (N, 2)
+        """Order them clockwise -> prevent bowtie shape"""
         transposed = False
         if points.shape[0] == 2:
             points = points.T
-            transposed = True  # remember original format
+            transposed = True
 
         center = points.mean(axis=0)
         angles = np.arctan2(points[:, 1] - center[1],
@@ -442,7 +441,6 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         order = np.argsort(angles)
         ordered = points[order]
 
-        # return in original shape
         return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
@@ -458,7 +456,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         """
         with torch.no_grad():
             if self.safe_action_polytope:
-                A, b = self.compute_A_b()
+                A, b = self.compute_polytope_generator()
                 self.last_safe_action_set = sets.HPolytope(A=A, b=b)
             else:
                 generator = self.compute_generator()
@@ -541,65 +539,70 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         """
         batch = self.num_envs
         dim = self.state_dim
-        asi = self.action_set.generator[0].diag()  # action limit per dimension
+        asi = self.action_set.generator[0].diag()
 
-        agent_pos = self.state            # (B, dim)
-        noise = self.noise_set.sample()   # (B, dim)
+        agent_pos = self.state
+        noise = self.noise_set.sample()
         
-        # ----- Boundary constraints -----
+        # Boundary constraints
         boundary_size = (self.state_set.max - self.state_set.min) / 2
         b_upper = boundary_size - agent_pos
         b_lower = boundary_size + agent_pos
-        b_boundary = torch.cat([b_upper, b_lower], dim=1)   # (B, 2*dim)
+        b_boundary = torch.cat([b_upper, b_lower], dim=1)
 
         I = torch.eye(dim, device=self.state.device)
-        A_boundary_single = torch.cat([I, -I], dim=0)       # (2*dim, dim)
+        A_boundary_single = torch.cat([I, -I], dim=0)
         A_boundary = A_boundary_single.unsqueeze(0).repeat(batch, 1, 1)
 
-        # ----- Action constraints -----
-        b_action = torch.cat([asi, asi], dim=0).unsqueeze(0).repeat(batch, 1)  # (B, 2*dim)
-        A_action_single = torch.cat([-I, I], dim=0)                            # (2*dim, dim)
+        # Action constraints
+        b_action = torch.cat([asi, asi], dim=0).unsqueeze(0).repeat(batch, 1)
+        A_action_single = torch.cat([-I, I], dim=0)
         A_action = A_action_single.unsqueeze(0).repeat(batch, 1, 1)
 
-        # ----- Combine fixed constraints -----
-        b_fixed = torch.cat([b_boundary, b_action], dim=1)     # (B, 4*dim)
-        A_fixed = torch.cat([A_boundary, A_action], dim=1)     # (B, 4*dim, dim)
+        # Combine fixed constraints
+        b_fixed = torch.cat([b_boundary, b_action], dim=1)
+        A_fixed = torch.cat([A_boundary, A_action], dim=1)
 
-        # ----- Obstacle constraints -----
+        # Obstacle constraints
         max_obs_constraints = self.obstacle_centers.tensor.shape[0]
         total_constraints = 4*dim + max_obs_constraints
 
         A_padded = torch.zeros(batch, total_constraints, dim, device=self.state.device)
         b_padded = torch.full((batch, total_constraints), float('inf'), device=self.state.device)
 
-        # Copy fixed constraints
         A_padded[:, :4*dim, :] = A_fixed
         b_padded[:, :4*dim] = b_fixed
+        threshold = (torch.sqrt(torch.tensor(dim, device=self.state.device)) * (asi[0] + noise[:, 0]))
 
-        threshold = (torch.sqrt(torch.tensor(dim, device=self.state.device)) * (asi[0] + noise[:, 0])).unsqueeze(1)
+        B, D = agent_pos.shape
+        centers = self.obstacle_centers.tensor.permute(1, 0, 2)
+        radii = self.obstacle_radii.tensor.permute(1, 0)
 
-        for b_idx in range(batch):
-            obs_idx = 4*dim
-            for c in range(max_obs_constraints):
-                center = self.obstacle_centers.tensor[c, b_idx]
-                radius = float(self.obstacle_radii.tensor[c, b_idx])
-                dist = torch.linalg.norm(center - agent_pos[b_idx])
-                
-                if dist - radius > threshold[b_idx]:
-                    # Obstacle too far; skip
-                    A_padded[b_idx, obs_idx, :] = 0
-                    b_padded[b_idx, obs_idx] = float('inf')
-                else:
-                    # Halfspace: a^T x <= b
-                    a = center - agent_pos[b_idx]
-                    norm_a = torch.linalg.norm(a)
-                    if norm_a < 1e-8:
-                        a_normalized = torch.zeros_like(a)
-                    else:
-                        a_normalized = a / norm_a
-                    b_val = dist - radius - noise[b_idx, 0]  # subtract noise like NumPy version
-                    A_padded[b_idx, obs_idx, :] = a_normalized
-                    b_padded[b_idx, obs_idx] = b_val
-                obs_idx += 1
+        # Distance to obstacle
+        agent = agent_pos[:, None, :] 
+        a = centers - agent
+        norm_a = torch.linalg.norm(a, dim=-1, keepdim=True)
+        dist = torch.linalg.norm(a, dim=-1)
+        a_normalized = torch.zeros_like(a)
+        valid = norm_a > 1e-8
+        a_normalized[valid.expand_as(a)] = (a / norm_a)[valid.expand_as(a)]
+
+        # Threshold condition
+        # far_mask = True means obstacle is too far and should be skipped
+        far_mask = (dist - radii) > threshold[:, None]
+        near_mask = ~far_mask
+
+        b_val = dist - radii - noise[:, 0:1]
+
+        A_obs = torch.zeros((B, max_obs_constraints, D), device=agent_pos.device, dtype=agent_pos.dtype)
+        b_obs = torch.full((B, max_obs_constraints), float('inf'), device=agent_pos.device, dtype=agent_pos.dtype)
+
+        A_obs[near_mask] = a_normalized[near_mask]
+        b_obs[near_mask] = b_val[near_mask]
+
+        start = 4 * dim
+        end = start + max_obs_constraints
+        A_padded[:, start:end, :] = A_obs
+        b_padded[:, start:end] = b_obs
 
         return A_padded, b_padded
