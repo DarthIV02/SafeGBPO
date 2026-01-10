@@ -56,8 +56,8 @@ class RayMaskSafeguard(Safeguard):
         elif polytopic_approximation:
             self.distance_approximations = self.polytopic_approximation
             self.state_constrained = True
-            if not self.env.polytope:
-                raise Exception("Env also has to be polytope, change 'polytopic_approach' parameter.")
+            if not self.env.safe_action_polytope:
+                raise Exception("Env also has to be polytope, change 'safe_action_polytope' parameter.")
         else:
             self.distance_approximations = self.orthogonal_approximation
 

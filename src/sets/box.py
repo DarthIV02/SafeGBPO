@@ -154,7 +154,7 @@ class Box(Zonotope):
                 (other_projection_len <= other_edge_len + other_supports).all(dim=1)
 
         # WARNING: NOT SURE IF THIS IS MATHEMATICALLY SOUND
-        elif isinstance(other, sets.Polytope):
+        elif isinstance(other, sets.HPolytope):
             """
             Parallel Box-Polytope intersection using ray-hyperplane method.
             Returns: (batch,) bool tensor
@@ -168,7 +168,7 @@ class Box(Zonotope):
             dir_vec = dir_vec / (dist + 1e-8)  # normalized directions
 
             # Compute intersection t_lower and t_upper for all rays
-            t_lower, t_upper = ray_hyperplane_intersections_parallel(
+            t_lower, t_upper = other.ray_hyperplane_intersections_parallel(
                 self.center, dir_vec, other.A, other.b
             )
 

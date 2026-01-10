@@ -72,7 +72,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self.min_radius = min_radius
         self.max_radius = max_radius
         self.draw_safe_action_set = draw_safe_action_set
-        self.polytope = safe_action_polytope
+        self.safe_action_polytope = safe_action_polytope
 
         self.obstacles: list[sets.Ball] = [sets.Ball(torch.empty((num_envs, 2)), torch.empty(num_envs)) for _ in
                                            range(num_obstacles)]
@@ -85,15 +85,13 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
         self.generator_layer = None
 
-        if not self.polytope:
+        if not self.safe_action_polytope:
             self.last_safe_action_set: sets.Zonotope = sets.Zonotope(torch.zeros(self.num_envs, self.state_dim),
                                                                      torch.zeros(self.num_envs, self.state_dim,
                                                                                  self.num_action_gens))
-            self.shape = sets.Zonotope
         else:
             self.last_safe_action_set: sets.HPolytope = sets.HPolytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
                                                                      b=torch.zeros(self.num_envs, self.state_dim))
-            self.shape = sets.HPolytope
 
     @jaxtyped(typechecker=beartype)
     def reset(self, seed: Optional[int] = None) -> tuple[
@@ -390,7 +388,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                 overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
                 overlay_draw = ImageDraw.Draw(overlay)
                 
-                if self.polytope:
+                if self.safe_action_polytope:
                     A_i = self.last_safe_action_set.A[i]          # (num_constraints, dim)
                     b_i = self.last_safe_action_set.b[i]          # (num_constraints,)
                     s_i = self.state[i]                            # (dim,)
@@ -469,12 +467,12 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
             Cache the result if it is expensive to compute.
         """
         with torch.no_grad():
-            if self.polytope:
+            if self.safe_action_polytope:
                 A, b = self.compute_A_b()
-                self.last_safe_action_set = self.shape(A=A, b=b)
+                self.last_safe_action_set = sets.HPolytope(A=A, b=b)
             else:
                 generator = self.compute_generator()
-                self.last_safe_action_set = self.shape(self.action_set.center, generator)
+                self.last_safe_action_set = sets.Zonotope(self.action_set.center, generator)
 
             return self.last_safe_action_set
 

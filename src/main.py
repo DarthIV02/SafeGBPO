@@ -5,16 +5,20 @@ from typing import Optional
 import torch
 import wandb
 import optuna # used to train the hyperparameters
+import csv
+from pathlib import Path
+import copy
 
 from logger import Logger
 from utils import categorise_run, import_module, gather_custom_modules
 from conf.experiment import Experiment
 
-torch.set_default_device("cuda:0" if torch.cuda.is_available() else "cpu")
+torch.set_default_device("cuda:1" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.float64)
 torch.autograd.set_detect_anomaly(False)
 
 def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> float:
+    cfg = copy.deepcopy(cfg)
     if trial is not None:
         cfg.learning_algorithm.vary(trial, cfg)
 
@@ -57,7 +61,7 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
 
     if cfg.safeguard:
         ## Yasin note: here the enviroment is packaged into the Safeguard such that it is encapsulated and has the same properties as env.
-        print("Main: ", cfg.safeguard.name)
+        print("Model: ", cfg.safeguard.name)
         safeguard_class = import_module(modules, cfg.safeguard.name + "Safeguard")
         env = safeguard_class(env, **asdict(cfg.safeguard))
         eval_env = safeguard_class(eval_env, **asdict(cfg.safeguard))
@@ -77,7 +81,7 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     run.finish()
     # ---------------------------------------------------------
 
-    return logger.best_reward
+    return logger.best_reward, run.id
 
 
 if __name__ == "__main__":
@@ -93,7 +97,7 @@ if __name__ == "__main__":
  
      # this is the experiment for the benchmarking in the paper
     experiment_queue = [
-        Experiment(num_runs=1,
+        Experiment(num_runs=10,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=None,
@@ -101,7 +105,7 @@ if __name__ == "__main__":
                    eval_freq=5_000,
                    fast_eval=False),
 
-        Experiment(num_runs=1,
+        Experiment(num_runs=10,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
@@ -109,36 +113,36 @@ if __name__ == "__main__":
                    eval_freq=5_000,
                    fast_eval=False),
 
-        Experiment(num_runs=1,
+        Experiment(num_runs=10,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=RayMaskConfig(),
                    interactions=100_000,
                    eval_freq=5_000,
                    fast_eval=False),
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(),
-                   safeguard=RayMaskConfig(zonotopic_approximation=True),
-                   interactions=100_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(polytopic_approach=True),
-                   safeguard=RayMaskConfig(polytopic_approximation=True),
-                   interactions=100_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
+        # Experiment(num_runs=10,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(),
+        #            safeguard=RayMaskConfig(zonotopic_approximation=True),
+        #            interactions=100_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
+        # Experiment(num_runs=10,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(polytopic_approach=True),
+        #            safeguard=RayMaskConfig(polytopic_approximation=True),
+        #            interactions=100_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
         
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(polytopic_approach=False),
-                   safeguard=FSNetConfig(),
-                   interactions=100_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        Experiment(num_runs=1,
+        # Experiment(num_runs=10,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(polytopic_approach=False),
+        #            safeguard=FSNetConfig(),
+        #            interactions=100_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
+        Experiment(num_runs=10,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(polytopic_approach=True),
                    safeguard=FSNetConfig(),
@@ -146,21 +150,21 @@ if __name__ == "__main__":
                    eval_freq=5_000,
                    fast_eval=False),
 
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(polytopic_approach=True),
-                   safeguard=PinetConfig(bwd_method="unroll", n_iter_admm=100),
-                   interactions=100_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        Experiment(num_runs=1,
-                   learning_algorithm=SHACConfig(),
-                   env=NavigateSeekerConfig(polytopic_approach=True),
-                   safeguard=PinetConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5, fpi=False),
-                   interactions=100_000,
-                   eval_freq=5_000,
-                   fast_eval=False),
-        Experiment(num_runs=1,
+        # Experiment(num_runs=10,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(polytopic_approach=True),
+        #            safeguard=PinetConfig(bwd_method="unroll", n_iter_admm=100),
+        #            interactions=100_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
+        # Experiment(num_runs=10,
+        #            learning_algorithm=SHACConfig(),
+        #            env=NavigateSeekerConfig(polytopic_approach=True),
+        #            safeguard=PinetConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5, fpi=False),
+        #            interactions=100_000,
+        #            eval_freq=5_000,
+        #            fast_eval=False),
+        Experiment(num_runs=10,
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(polytopic_approach=True),
                    safeguard=PinetConfig(bwd_method="implicit", n_iter_admm=100, n_iter_bwd=5, fpi=True),
@@ -168,6 +172,14 @@ if __name__ == "__main__":
                    eval_freq=5_000,
                    fast_eval=False),
     ]
+
+    csv_path = Path("src/runs_ids.csv")
+
+    # Create file and header ONLY if it does not exist
+    if not csv_path.exists():
+        with open(csv_path, mode="w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["run_index", "safeguard", "wandb_run_id"])
 
     for i, experiment in enumerate(experiment_queue):
         if experiment.num_runs == 0:
@@ -188,4 +200,10 @@ if __name__ == "__main__":
         else:
             print(f"[STATUS] Running experiment [{i + 1}/{len(experiment_queue)}]")
             for j in range(experiment.num_runs):
-                run_experiment(experiment)
+                print(f"  → Run {j + 1}/{experiment.num_runs}")
+
+                _, run_id = run_experiment(experiment)
+
+                with open(csv_path, mode="a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([j, experiment.safeguard.name if experiment.safeguard else "None", run_id])

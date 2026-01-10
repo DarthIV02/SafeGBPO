@@ -218,7 +218,7 @@ class PinetJAXSafeguard(Safeguard):
         jax.config.update("jax_enable_x64", True)
         self.save_dim = False
 
-        if not self.env.polytope:
+        if not self.env.safe_action_polytope:
             raise Exception("Polytope attribute has to be True")
 
 
