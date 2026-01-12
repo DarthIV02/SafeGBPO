@@ -11,7 +11,7 @@ from scipy.optimize import linprog
 from sets.interface.convex_set import ConvexSet
 from scipy.spatial import HalfspaceIntersection
 
-class HPolytope(ConvexSet):
+class Polytope(ConvexSet):
     """
     Batched H-Polytope representation defined as:
         P_i = { x | A_i x <= b_i } for i in [0, batch_dim)
@@ -51,9 +51,9 @@ class HPolytope(ConvexSet):
     def __getitem__(self, idx) -> Self:
         """Return a single HPolytope instance or a batched subset."""
         if isinstance(idx, int):
-            return HPolytope(self.A[idx].unsqueeze(0), self.b[idx].unsqueeze(0))
+            return Polytope(self.A[idx].unsqueeze(0), self.b[idx].unsqueeze(0))
         elif isinstance(idx, Tensor) or isinstance(idx, slice):
-            return HPolytope(self.A[idx], self.b[idx])
+            return Polytope(self.A[idx], self.b[idx])
         else:
             raise TypeError(f"Invalid index type {type(idx)}")
 

@@ -153,8 +153,7 @@ class Box(Zonotope):
             return (projection_len <= self.edge_len + supports).all(dim=1) & \
                 (other_projection_len <= other_edge_len + other_supports).all(dim=1)
 
-        # WARNING: NOT SURE IF THIS IS MATHEMATICALLY SOUND
-        elif isinstance(other, sets.HPolytope):
+        elif isinstance(other, sets.Polytope):
             """
             Parallel Box-Polytope intersection using ray-hyperplane method.
             Returns: (batch,) bool tensor
@@ -162,10 +161,10 @@ class Box(Zonotope):
             batch = self.center.shape[0]
 
             # Rays from box centers to polytope center
-            poly_center = other.center().unsqueeze(0).expand(batch, -1)  # (batch, dim)
+            poly_center = other.center().unsqueeze(0).expand(batch, -1)
             dir_vec = poly_center - self.center
             dist = torch.norm(dir_vec, dim=1, keepdim=True)
-            dir_vec = dir_vec / (dist + 1e-8)  # normalized directions
+            dir_vec = dir_vec / (dist + 1e-8)
 
             # Compute intersection t_lower and t_upper for all rays
             t_lower, t_upper = other.ray_hyperplane_intersections_parallel(

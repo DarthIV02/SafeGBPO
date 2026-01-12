@@ -134,45 +134,41 @@ class Capsule(ConvexSet):
         elif isinstance(other, sets.Zonotope):
             # Over approximation of the zonotope by a box to lower computational complexity
             return self.contains(other.box())
-        elif isinstance(other, sets.HPolytope):
-            # WARNING: Ask Tim here
+        elif isinstance(other, sets.Polytope):
             """
             Check in parallel if a batch of capsules intersects a polytope.
             """
-            batch, dim = self.shape
             epsilon = 1e-8,
 
-            # 1. Compute capsule line segment direction
+            # Compute capsule line segment direction
             dir_vec = self.end[0] - self.start[0]
             segment_len = torch.norm(dir_vec, dim=1, keepdim=True)
-            # Avoid division by zero
             dir_unit = dir_vec / (segment_len + 1e-8)
 
-            # 2. Cast rays from capsule start along segment direction
+            # Cast rays from capsule start along segment direction
             t_lower, t_upper = other.ray_hyperplane_intersections_parallel(
-                c=self.start[0],        # (batch, dim)
-                d=dir_unit,             # (batch, dim)
-                A=other.A,               # (num_hyperplanes, dim)
-                b=other.b,               # (num_hyperplanes,)
+                c=self.start[0],        
+                d=dir_unit,             
+                A=other.A,               
+                b=other.b,               
                 epsilon=epsilon
             )
 
-            # 3. Check if line segment intersects polytope
+            # Check if line segment intersects polytope
             # The segment is [0, segment_len], so intersection exists if:
             intersects_line = (t_upper >= 0) & (t_lower <= segment_len.squeeze(1))
 
-            # 4. Compute closest approach distance if segment intersects partially
+            # Compute closest approach distance if segment intersects partially
             # Take t_clamped inside [0, segment_len] to compute closest point
             t_clamped = torch.clamp(t_lower, min=0.0, max=segment_len.squeeze(1))
-            closest_point = capsule_start + dir_unit * t_clamped.unsqueeze(1)  # (batch, dim)
+            closest_point = self.start + dir_unit * t_clamped.unsqueeze(1)  # (batch, dim)
 
-            # 5. Distance from closest point to polytope along any violated hyperplane
+            # Distance from closest point to polytope along any violated hyperplane
             violations = torch.matmul(closest_point, other.A.T) - other.b.unsqueeze(0)  # (batch, num_planes)
             violations = torch.clamp(violations, min=0.0)
             min_distance = torch.min(violations, dim=1).values  # smallest distance to hyperplanes
 
-            # 6. Capsule intersects if line intersects or distance <= radius
-            intersects = intersects_line | (min_distance <= capsule_radius)
+            intersects = intersects_line | (min_distance <= self.radius)
 
             return intersects
         else:

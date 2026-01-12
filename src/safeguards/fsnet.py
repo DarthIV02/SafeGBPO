@@ -6,7 +6,7 @@ import torch
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
-from src.sets.polytope import HPolytope
+from src.sets.polytope import Polytope
 from src.sets.zonotope import Zonotope
 
 from safeguards.fsnet_solvers.lbfgs import hybrid_lbfgs_solve, nondiff_lbfgs_solve #original file from FSNet codebase with kwargs extension
@@ -80,7 +80,7 @@ class FSNetSafeguard(Safeguard):
         """
 
         self.data = self.safe_action_set()
-        if not isinstance(self.data, (HPolytope, Zonotope)):
+        if not isinstance(self.data, (Polytope, Zonotope)):
             raise NotImplementedError("FSNet only supports Polytope and Zonotope safe action sets.")
 
         # first setup the residuals by computing A and b matrices (Ay ≤ b) and equality matrices (Cy = d)

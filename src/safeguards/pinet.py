@@ -10,7 +10,7 @@ from torch.func import jacrev, vmap
 import torch.nn.functional as F
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
-from src.sets import Hyperplane
+import src.sets as sets
 
 @dataclass
 class BoxConstraint:
@@ -163,7 +163,7 @@ class PinetSafeguard(Safeguard):
             b.unsqueeze(2)
         ], dim=1)
 
-        self.eq = Hyperplane(Aeq, self.beq)
+        self.eq = sets.Hyperplane(Aeq, self.beq)
         self.box = BoxConstraint(self.lb, ub)
 
         y_safe = _ProjectImplicitFn.apply(

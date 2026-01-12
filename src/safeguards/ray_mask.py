@@ -66,7 +66,6 @@ class RayMaskSafeguard(Safeguard):
         self.boundary_projection_safeguard = None
         self.implicit_zonotope_distance_layer = None
         self.regularisation_coefficient = regularisation_coefficient
-        self.ray_mask = True
     
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -172,7 +171,7 @@ class RayMaskSafeguard(Safeguard):
         A = torch.nan_to_num(A, nan=0.0, posinf=1e6, neginf=-1e6)
         b = torch.nan_to_num(b, nan=1e6, posinf=1e6, neginf=-1e6)
 
-        polytopes = sets.HPolytope(A=A, b=b)
+        polytopes = sets.Polytope(A=A, b=b)
 
         # ----- Compute centers safely -----
         centers = polytopes.center()

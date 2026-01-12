@@ -90,7 +90,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                                                                      torch.zeros(self.num_envs, self.state_dim,
                                                                                  self.num_action_gens))
         else:
-            self.last_safe_action_set: sets.HPolytope = sets.HPolytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
+            self.last_safe_action_set: sets.Polytope = sets.Polytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
                                                                      b=torch.zeros(self.num_envs, self.state_dim))
 
     @jaxtyped(typechecker=beartype)
@@ -390,7 +390,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     s_i = self.state[i]
 
                     b_shifted = (b_i + torch.matmul(A_i, s_i))
-                    draw_set = sets.HPolytope(A = A_i.unsqueeze(0),
+                    draw_set = sets.Polytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
                     result = draw_set.vertices()
@@ -444,7 +444,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
-    def safe_action_set(self) -> Union[sets.Zonotope, sets.HPolytope]:
+    def safe_action_set(self) -> Union[sets.Zonotope, sets.Polytope]:
         """
         Get the safe action set for the current state.
 
@@ -457,7 +457,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         with torch.no_grad():
             if self.safe_action_polytope:
                 A, b = self.compute_polytope_generator()
-                self.last_safe_action_set = sets.HPolytope(A=A, b=b)
+                self.last_safe_action_set = sets.Polytope(A=A, b=b)
             else:
                 generator = self.compute_generator()
                 self.last_safe_action_set = sets.Zonotope(self.action_set.center, generator)

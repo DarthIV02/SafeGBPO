@@ -5,7 +5,6 @@ from torch import Tensor
 from beartype import beartype
 from jaxtyping import jaxtyped, Float, Bool
 
-
 class ConvexSet(ABC):
     """
     Interface for convex set classes. (Batched)
