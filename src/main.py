@@ -97,7 +97,7 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
             
             if t == 0:
                 # 1. Create a single unsafe action [1, 2]
-                single_unsafe_action = torch.tensor([[2.0, 2.0]], device=action.device, dtype=torch.float64)
+                single_unsafe_action = torch.tensor([[1.0, 2.0]], device=action.device, dtype=torch.float64)
                 
                 # 2. Expand it to match the batch size (Batch, 2)
                 # obs.shape[0] is the batch_dim (likely 24)
@@ -165,28 +165,28 @@ if __name__ == "__main__":
         #            fast_eval=False),
         
         # --- FSNet ---
-        Experiment(
-            num_runs=1,
-            learning_algorithm=SHACConfig(),
-            env=NavigateSeekerConfig(),
-            safeguard=FSNetConfig(),
-            interactions=2000,
-            eval_freq=1000,
-            fast_eval=True
-        )
-        
-        # ,
-
-        # # --- PiNet ---
         # Experiment(
         #     num_runs=1,
         #     learning_algorithm=SHACConfig(),
-        #     env=NavigateSeekerConfig(polytopic_approach=True),
-        #     safeguard=PinetConfig(), 
+        #     env=NavigateSeekerConfig(),
+        #     safeguard=FSNetConfig(),
         #     interactions=2000,
         #     eval_freq=1000,
         #     fast_eval=True
         # )
+        
+        # ,
+
+        # # --- PiNet ---
+        Experiment(
+            num_runs=1,
+            learning_algorithm=SHACConfig(),
+            env=NavigateSeekerConfig(polytopic_approach=True),
+            safeguard=PinetConfig(), 
+            interactions=2000,
+            eval_freq=1000,
+            fast_eval=True
+        )
     ]
 
     

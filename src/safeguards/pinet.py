@@ -36,7 +36,8 @@ class HyperplaneConstraint:
         with torch.no_grad():
             Apinv = torch.linalg.pinv(A)
             B, m, n = A.shape
-            self.P = torch.eye(n).expand(B, n, n) - torch.bmm(Apinv, A)
+            # ensure identity is on the same device and dtype as A to avoid device mismatches
+            self.P = torch.eye(n, device=A.device, dtype=A.dtype).expand(B, n, n) - torch.bmm(Apinv, A)
             self.c = torch.bmm(Apinv, b)
         self.P = self.P.detach()    
         self.c = self.c.detach()
@@ -142,14 +143,15 @@ class PinetSafeguard(Safeguard):
             Bbatch, m, D = A.shape
             total_dim = D + m
             
-            E = torch.zeros(Bbatch, D, D, device=A.device)
-            Z = torch.zeros(Bbatch, D, m, device=A.device)
-            self.negI = -torch.eye(m, device=A.device).unsqueeze(0).repeat(Bbatch, 1, 1)
-            
+            # create tensors on the same device and dtype as A
+            E = torch.zeros(Bbatch, D, D, device=A.device, dtype=A.dtype)
+            Z = torch.zeros(Bbatch, D, m, device=A.device, dtype=A.dtype)
+            self.negI = -torch.eye(m, device=A.device, dtype=A.dtype).unsqueeze(0).repeat(Bbatch, 1, 1)
+
             self.top = torch.cat([E, Z], dim=2)
-            
-            self.beq = torch.zeros(Bbatch, total_dim, 1, device=A.device)
-            self.lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device)
+
+            self.beq = torch.zeros(Bbatch, total_dim, 1, device=A.device, dtype=A.dtype)
+            self.lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device, dtype=A.dtype)
             
             self.save_dim = True
 
@@ -162,12 +164,10 @@ class PinetSafeguard(Safeguard):
                 debug=True
             )
             
-            # 2. change coordinate (Step x Batch x ActionDim)
             D = self.action_dim
             self.last_trajectory = [t[:, :D, :].squeeze(2).detach().cpu() for t in trajectory_lifted]
             self.last_unsafe_action = action.detach().cpu()
 
-            # 3. save Safe Set (Polytope Ax<=b) 
             self.last_safe_set_info = {
                 "safe_set_A": A.detach().cpu(),
                 "safe_set_b": b.detach().cpu()
@@ -211,9 +211,6 @@ class PinetSafeguard(Safeguard):
             sk_iter = sk_iter + self.omega * (tk - zk)
 
             if debug:
-                # --- Visualization Fix: Save zk (projected state) instead of sk ---
-                # This ensures the trajectory is in the correct coordinate space
-                # Update zk for visualization (since sk_iter changed)
                 zk_next = self.eq.project(sk_iter)
                 trajectory.append(zk_next.detach().clone())
 
@@ -308,7 +305,7 @@ class PinetSafeguard(Safeguard):
             # --- Algorithm Change: Warm Start (Critical for Visualization) ---
             # Initialize with yraw (unsafe action) instead of zeros.
             # This makes the trajectory start FROM the unsafe action.
-            sK = yraw.clone().requires_grad_(True)
+            sK = torch.zeros_like(yraw, requires_grad=True) 
             
             if debug:
                 sK, trajectory = step_iteration(sK, yraw, n_iter, debug=True)

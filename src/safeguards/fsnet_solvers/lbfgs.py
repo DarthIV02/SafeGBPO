@@ -12,22 +12,6 @@ def _search_direction(
 ) -> torch.Tensor:                 # returns d (B, n)
     """
     Compute d = −H_k^{-1} g_k for L‑BFGS in batch mode using two-loop recursion.
-
-    Parameters
-    ----------
-    g : torch.Tensor
-        Current gradient, shape (B, n)
-    S : torch.Tensor
-        History of s_i vectors, shape (m, B, n)
-    Y : torch.Tensor
-        History of y_i vectors, shape (m, B, n)
-    gamma : torch.Tensor
-        Scalar or (B,1) scaling for the initial Hessian approximation
-
-    Returns
-    -------
-    torch.Tensor
-        Search direction, shape (B, n)
     """
     m = S.shape[0]  # history length
     eps = 1e-10
@@ -57,18 +41,6 @@ def _search_direction(
 def compute_gamma(S: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     """
     Compute the initial Hessian scaling factor γ = s^T y / y^T y.
-    
-    Parameters
-    ----------
-    S : torch.Tensor
-        History of s vectors, shape (m, B, n)
-    Y : torch.Tensor
-        History of y vectors, shape (m, B, n)
-        
-    Returns
-    -------
-    torch.Tensor
-        Scaling factor, shape (B, 1)
     """
     eps = 1e-10
     s_dot_y = (S[-1] * Y[-1]).sum(dim=1, keepdim=True)
@@ -149,25 +121,7 @@ def lbfgs_solve(
     **kwargs
 ) -> torch.Tensor:
     """
-    Differentiable L‑BFGS solver with vectorized two‑loop recursion.
-    
-    Parameters
-    ----------
-    y_init : torch.Tensor
-        Initial guess, shape (B, n)
-    x : torch.Tensor
-        Input data
-    data : object
-        Data object with eq_resid and ineq_resid methods
-    config : LBFGSConfig, optional
-        Configuration object. If None, uses default parameters from kwargs.
-    **kwargs
-        Additional parameters if config is not provided
-        
-    Returns
-    -------
-    torch.Tensor
-        Solution, shape (B, n)
+    Differentiable L‑BFGS solver.
     """
     if config is None:
         config = LBFGSConfig(**kwargs)
@@ -233,7 +187,6 @@ def lbfgs_solve(
     return y
 
 
-
 def nondiff_lbfgs_solve(
     x: torch.Tensor,
     y_init: torch.Tensor,
@@ -243,25 +196,27 @@ def nondiff_lbfgs_solve(
     Y_hist: Optional[torch.Tensor] = None,
     hist_len: int = 0,
     hist_ptr: int = 0,
-    debug_trajectory: bool = False, # Visualization Arg
+    debug_trajectory: bool = False,
     **kwargs
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """
     Non-differentiable L‑BFGS solver that doesn't build backward graph.
+    Supports trajectory recording for visualization.
     """
     
-    # Avoid config errors
+    # Avoid config errors if debug_trajectory is passed in kwargs
     if "debug_trajectory" in kwargs:
         kwargs.pop("debug_trajectory")
 
     if config is None:
         config = LBFGSConfig(**kwargs)
 
-    trajectory = [] # Init trajectory
-
+    trajectory = []
+    
     # Initialize without gradient tracking
     y = y_init.detach().clone().requires_grad_(True)
     
+    # Record initial point
     if debug_trajectory:
         trajectory.append(y.detach().cpu().clone())
 
@@ -304,11 +259,11 @@ def nondiff_lbfgs_solve(
         step = _backtracking_line_search(y, d, g, f_val, obj_func, config)
         
         y_next = y + step * d
-
+        
         # Record trajectory
         if debug_trajectory:
             trajectory.append(y_next.detach().cpu().clone())
-        
+
         # Update history with detached tensors
         y_next.requires_grad_(True)
         f_next = obj_func(y_next)
@@ -333,7 +288,6 @@ def nondiff_lbfgs_solve(
     return y
     
 
-
 def hybrid_lbfgs_solve(
     x: torch.Tensor,
     y_init: torch.Tensor,
@@ -345,29 +299,6 @@ def hybrid_lbfgs_solve(
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, list]]:
     """
     Hybrid L‑BFGS solver with truncated backpropagation.
-    
-    Starts with differentiable L‑BFGS and switches to non-differentiable
-    after max_diff_iter iterations for memory efficiency.
-    
-    Parameters
-    ----------
-    y_init : torch.Tensor
-        Initial guess, shape (B, n)
-    x : torch.Tensor
-        Input data
-    data : object
-        Data object with eq_resid and ineq_resid methods
-    max_diff_iter : int
-        Number of differentiable iterations before switching
-    config : LBFGSConfig, optional
-        Configuration object
-    **kwargs
-        Additional parameters if config is not provided
-        
-    Returns
-    -------
-    torch.Tensor
-        Solution with gradient connection to first max_diff_iter steps
     """
     if config is None:
         config = LBFGSConfig(**kwargs)
@@ -389,7 +320,7 @@ def hybrid_lbfgs_solve(
         verbose=config.verbose
     )
     
-    # Run differentiable phase (shortened version of lbfgs_solve)
+    # Run differentiable phase
     y = y_init.clone()
     B, n = y_init.shape
     device, dtype = y_init.device, y_init.dtype
@@ -409,7 +340,6 @@ def hybrid_lbfgs_solve(
                 print(f"Converged in differentiable phase at iteration {k}")
             return y
         
-        # Search direction
         if hist_len > 0:
             idx = (hist_ptr - hist_len + torch.arange(hist_len, device=device)) % config.memory
             S = S_hist[idx]
@@ -419,10 +349,8 @@ def hybrid_lbfgs_solve(
         else:
             d = -0.1 * g
         
-        # Line search
         step = _backtracking_line_search(y, d, g, f_val, obj_func, diff_config)
         
-        # Update
         y_next = y + step * d
         f_next = obj_func(y_next)
         g_next = torch.autograd.grad(f_next, y_next, create_graph=True)[0]
@@ -430,7 +358,6 @@ def hybrid_lbfgs_solve(
         if debug_trajectory:
             trajectory.append(y_next.detach().cpu().clone())
         
-        # Update history
         S_hist[hist_ptr] = y_next - y
         Y_hist[hist_ptr] = g_next - g
         hist_ptr = (hist_ptr + 1) % config.memory
@@ -457,18 +384,25 @@ def hybrid_lbfgs_solve(
         verbose=config.verbose
     )
     
-    y_nondiff = nondiff_lbfgs_solve(
+    # Call nondiff solver with explicit debug flag
+    result = nondiff_lbfgs_solve(
         x, y, data, remaining_config,
         S_hist=S_hist,
         Y_hist=Y_hist,
         hist_len=hist_len,
-        hist_ptr=hist_ptr
+        hist_ptr=hist_ptr,
+        debug_trajectory=debug_trajectory
     )
     
-    final_action = y + (y_nondiff - y).detach()
-        
     if debug_trajectory:
-        trajectory.append(final_action.detach().cpu().clone())
+        y_nondiff, nondiff_traj = result
+        # Merge trajectories (nondiff_traj starts with current y, which is already in trajectory)
+        if len(nondiff_traj) > 0:
+             # Skip the first element of nondiff_traj as it duplicates the last of diff phase
+             trajectory.extend(nondiff_traj[1:])
+        final_action = y + (y_nondiff - y).detach()
         return final_action, trajectory
     else:
+        y_nondiff = result
+        final_action = y + (y_nondiff - y).detach()
         return final_action

@@ -20,32 +20,6 @@ class FSNetSafeguard(Safeguard):
     """
     Projecting an unsafe action to the closest safe action.
     Safeguard implementation based on FSNet
-
-    min y∈Rn f(y; x) s.t. g(y; x) ≤ 0, h(y; x) = 0
-
-    Algorithm of FSNet Training Algorithm
-        1: init. NN weights θ, learning rate
-        2: repeat
-        3:      sample x ∼ D                -> state from the rl environment (not used in the safeguard directly)
-        4:      predict yθ(x) via NN        -> action of the policy
-        5:      compute yˆθ(x) = FS(yθ(x); x) 
-                        via minimzing ∥h(yθ(x); x)∥^2_2 + ∥g(yθ(x); x)∥^2_2 
-                        with gradient descent and  yθ(x) as the initial value 
-                                            -> LBFGS to get the safe action
-        6:      update θ with ∇θF(yθ(x), yˆθ(x)) 
-                        via the loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 
-                        (+ρ/2 * residual penalties for practical efficiency) 
-                                            -> add the safeguard loss to the policy loss
-        7: until convergence
-
-    Reference:
-
-    @article{nguyen2025fsnet,
-        title={FSNet: Feasibility-Seeking Neural Network for Constrained Optimization with Guarantees}, 
-        author={Hoang T. Nguyen and Priya L. Donti},
-        year={2025},
-        journal={arXiv preprint arXiv:2506.00362},
-    }
     """
 
     @jaxtyped(typechecker=beartype)
@@ -78,15 +52,6 @@ class FSNetSafeguard(Safeguard):
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
             -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
-        """
-        Safeguard the action to ensure safety.
-
-        Args:
-            action: The action to safeguard.
-
-        Returns:
-            The safeguarded action.
-        """
 
         self.data = self.safe_action_set()
         if not isinstance(self.data, (HPolytope, Zonotope)):
@@ -115,9 +80,9 @@ class FSNetSafeguard(Safeguard):
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad) for better backpropagation
 
-
         # --- Visualization Logic Start ---
         if self.debug_mode:
+            # Use the local LBFGS solver for visualization
             from safeguards.fsnet_solvers.lbfgs import nondiff_lbfgs_solve as debug_solver
             
             with torch.enable_grad():
@@ -131,11 +96,9 @@ class FSNetSafeguard(Safeguard):
             
             if isinstance(result, tuple):
                 safe_action, trajectory = result
-                
+                # Convert trajectory back to original space
                 self.last_trajectory = [self.data.post_process_action(t) for t in trajectory]
-                
                 self.last_unsafe_action = action.detach().cpu()
-                
             else:
                 safe_action = result
                 self.last_trajectory = [self.data.post_process_action(safe_action).detach().cpu()]
@@ -146,11 +109,12 @@ class FSNetSafeguard(Safeguard):
                     "safe_set_center": self.data.center.detach().cpu(),
                     "safe_set_generators": self.data.generator.detach().cpu()
                 }
-            elif hasattr(self.data, "A"): 
-                 pass
+            elif hasattr(self.data, "A"): # For HPolytope
+                self.last_safe_set_info = {
+                    "safe_set_A": self.data.A.detach().cpu(),
+                    "safe_set_b": self.data.b.detach().cpu()
+                }
         # --- Visualization Logic End ---
-
-
 
         elif torch.is_grad_enabled():
             # Training phase: usually no debug needed, keep it fast
@@ -177,10 +141,6 @@ class FSNetSafeguard(Safeguard):
         safe_action = self.data.post_process_action(safe_action)
 
         # --- Optimization: Restore originally safe actions ---
-        # Even if the solver ran, we overwrite the result with the original action if it was already safe.
-        # This prevents the solver from moving an already valid point due to numerical noise.
-        
-        # FIX: Removed .unsqueeze(1) because is_safe_mask is likely already [Batch, 1] due to sum(dim=1) behavior on [Batch, Const, 1]
         if is_safe_mask.ndim == 1:
             mask = is_safe_mask.unsqueeze(1).expand_as(action)
         else:
@@ -194,18 +154,11 @@ class FSNetSafeguard(Safeguard):
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
         """
         Compute the safeguard loss for FSNet.
-        Args:
-            action: The original action before safeguarding.
-            safe_action: The safeguarded action.
-        Returns:
-            The safeguard loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
-
         # compute the safeguard loss
         loss = self.regularisation_coefficient/2 * torch.nn.functional.mse_loss(safe_action, action) 
         
         # add penalty for residual violations as defined in FSNet paper practical implementation
-        # for good backpropagation, only add penalty if the mean violation is significant
         if self.pre_eq_violation.mean() > 1e-3:
             loss = loss + self.regularisation_coefficient * self.pre_eq_violation.mean()
         if self.pre_ineq_violation.mean() > 1e-3:
@@ -213,10 +166,6 @@ class FSNetSafeguard(Safeguard):
         return loss
     
     def safeguard_metrics(self):
-        """
-            Metrics to monitor the safeguard performance residual violations 
-        """
-
         return  super().safeguard_metrics() | {
             "pre_eq_violation":     self.pre_eq_violation.mean().item() if type(self.pre_eq_violation) == torch.Tensor else self.pre_eq_violation,
             "pre_ineq_violation":   self.pre_ineq_violation.mean().item() if type(self.pre_ineq_violation) == torch.Tensor else self.pre_ineq_violation,
