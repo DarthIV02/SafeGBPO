@@ -305,7 +305,11 @@ class PinetSafeguard(Safeguard):
             # --- Algorithm Change: Warm Start (Critical for Visualization) ---
             # Initialize with yraw (unsafe action) instead of zeros.
             # This makes the trajectory start FROM the unsafe action.
+<<<<<<< HEAD
             sK = torch.zeros_like(yraw, requires_grad=True) 
+=======
+            sK = torch.zeros_like(yraw, requires_grad=True)
+>>>>>>> 6aee374f1053edc2c315664ba493be5420e3b7e0
             
             if debug:
                 sK, trajectory = step_iteration(sK, yraw, n_iter, debug=True)
