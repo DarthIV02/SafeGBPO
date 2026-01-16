@@ -7,8 +7,8 @@ import torch
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 
-from sets.polytope import HPolytope
-from sets.zonotope import Zonotope
+from src.sets.polytope import Polytope
+from src.sets.zonotope import Zonotope
 
  
 class FSNetSafeguard(Safeguard):
@@ -74,7 +74,7 @@ class FSNetSafeguard(Safeguard):
         # for FSNet create a data object that contains the constraint representation and residual functions
         # for this implementation we implement it from the convex safe action set in the env
         self.data = self.safe_action_set()
-        if not isinstance(self.data, (HPolytope, Zonotope)):
+        if not isinstance(self.data, (Polytope, Zonotope)):
             raise NotImplementedError("FSNet only supports Polytope and Zonotope safe action sets.")
 
         self.data.setup_constraints()
@@ -141,10 +141,10 @@ class FSNetSafeguard(Safeguard):
         """
 
         return  super().safeguard_metrics() | {
-            "pre_eq_violation":     self.pre_eq_violation.mean().item(),
-            "pre_ineq_violation":   self.pre_ineq_violation.mean().item(),
-            "post_eq_violation":    self.post_eq_violation.mean().item(),
-            "post_ineq_violation":  self.post_ineq_violation.mean().item(),
+            "pre_eq_violation":     self.pre_eq_violation.mean().item() if type(self.pre_eq_violation) == torch.Tensor else self.pre_eq_violation,
+            "pre_ineq_violation":   self.pre_ineq_violation.mean().item() if type(self.pre_ineq_violation) == torch.Tensor else self.pre_ineq_violation,
+            "post_eq_violation":    self.post_eq_violation.mean().item() if type(self.post_eq_violation) == torch.Tensor else self.post_eq_violation,
+            "post_ineq_violation":  self.post_ineq_violation.mean().item() if type(self.post_ineq_violation) == torch.Tensor else self.post_ineq_violation,
         }
     
 #################################################

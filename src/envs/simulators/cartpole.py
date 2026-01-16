@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 from jaxtyping import jaxtyped, Float, Bool
 from torchvision.transforms.functional import to_tensor
 
-import sets as sets
+import src.sets as sets
 from envs.simulators.interfaces.simulator import Simulator
 
 

@@ -9,7 +9,7 @@ from beartype import beartype
 from jaxtyping import  Float, jaxtyped
 from gymnasium.vector import VectorActionWrapper  # used to parallize the enviroments 
 
-import sets as sets
+import src.sets as sets
 from envs.simulators.interfaces.simulator import Simulator
 from envs.interfaces.safe_state_env import SafeStateEnv
 from envs.interfaces.safe_action_env import SafeActionEnv
@@ -32,7 +32,6 @@ class Safeguard(VectorActionWrapper, ABC):
         Args:
             env: A custom secured, pytorch-based environment.
         """
-        ## Yasin note: here the wrapper encapsulation happens such that it has the same  variables and parallized functions 
         super().__init__(env)
         self.batch_dim = self.env.num_envs
         self.state_dim = self.env.state_dim
@@ -57,42 +56,35 @@ class Safeguard(VectorActionWrapper, ABC):
         self.safe_action = None
         self.interventions = 0
 
+        self.pre_eq_violation = torch.Tensor([0])
+        self.pre_ineq_violation = torch.Tensor([0])
+        self.post_eq_violation = torch.Tensor([0])
+        self.post_ineq_violation = torch.Tensor([0])
+        self.pre_constraint_violation = torch.Tensor([0])
+        self.post_constraint_violation = torch.Tensor([0])
+        self.dist_safe_action = torch.Tensor([0])
 
     @jaxtyped(typechecker=beartype)
     def actions(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
             -> Float[Tensor, "{self.batch_dim} {self.action_dim}"]:
         reachable_set = self.env.reachable_set()
-
-        ### Yasin Tag: 
-
-        ## Yasin note: this function come frome the VectorActionWrapper abstract class and is used to transform the policy before inputing it into the env
-        # the simulator env is defined as an Vector env where you have to connect it with execute_action which is the connection here i think
-        # the execute_action is then used in the simulator step to then output the reward,
-        # Batch of (observations, rewards, terminations, truncations, infos)
-        
         # This is an overapproximation so it may not intersect
-
-        ## Yasin note: reachable set is the set of states when doing an action from a safe state which of course can be unsafe
-        ## the state_set is the safe set defined by the enviroment. the projectable should then just be aboolean vector i guess that looks if we have to do the safeguard function
-        
-        ## Paper note: his makes it possible to replace any constraint on a safe action as,i ∈ As by the state constraint Si+1(as,i, si) ⊆ Ss.
         projectable = self.env.state_set.intersects(reachable_set)
 
-        ## Yasin note: this is where the model uses its safeguard optimisation like BP or Rays for actions outside the safe set
-        safe_action = torch.where(projectable.unsqueeze(1), action, self.safeguard(action))
+        safe_action = torch.where(projectable.unsqueeze(1), self.safeguard(action), action)
+        nan_mask = safe_action.isnan().any(dim=1) | safe_action.isinf().any(dim=1)
+        bad_mask = projectable & nan_mask
 
-
-        if safe_action.isnan().any() or safe_action.isinf().any():
+        if bad_mask.any():
             raise ValueError(f"""
-            Safe action are NaN. 
-            {self.env.state[projectable][safe_action.isnan().any(dim=1)]}
-            {action[projectable][safe_action.isnan().any(dim=1)]}
-            {self.env.state[projectable][safe_action.isinf().any(dim=1)]}
-            {action[projectable][safe_action.isinf().any(dim=1)]}
+            Safe action are NaN or Inf.
+            States: {self.env.state[bad_mask]}
+            Actions: {action[bad_mask]}
+            Safe actions: {safe_action[bad_mask]}
             """)
 
         self.safe_action = safe_action
-        self.dist_safe_action = torch.norm(self.safe_action - action, dim=1).mean().item()
+        
         self.interventions += ((~torch.isclose(safe_action, action)).count_nonzero(dim=1) == self.action_dim).sum().item()
         return safe_action
 
@@ -128,7 +120,6 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
-    @abstractmethod
     def safeguard_metrics(self) -> dict[str, Any]:
         """
         Get metrics related to the safeguard.
@@ -136,7 +127,15 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             A dictionary of metrics.
         """
-        return {"dist_safe_action": self.dist_safe_action}
+        return {
+            "dist_safe_action":     self.dist_safe_action,
+            "pre_eq_violation":     self.pre_eq_violation,
+            "pre_ineq_violation":   self.pre_ineq_violation,
+            "post_eq_violation":    self.post_eq_violation,
+            "post_ineq_violation":  self.post_ineq_violation,
+            "pre_contraint_violation": self.pre_constraint_violation,
+            "post_contraint_violation": self.post_constraint_violation
+        }
 
     @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \

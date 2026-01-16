@@ -53,7 +53,7 @@ class NavigateSeekerConfig(EnvConfig):
     min_radius: float = 2.0
     max_radius: float = 4.0
     draw_safe_action_set: bool = True
-    polytopic_approach: bool =  False
+    safe_action_polytope: bool =  False
 
 @dataclass
 class ManageHouseholdConfig(EnvConfig):

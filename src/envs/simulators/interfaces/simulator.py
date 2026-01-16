@@ -7,8 +7,7 @@ from beartype import beartype
 from gymnasium.vector import VectorEnv
 from jaxtyping import Float, Bool, jaxtyped
 
-import sets as sets
-import numpy as np
+import src.sets as sets
 
 class Simulator(ABC, VectorEnv):
     """
@@ -69,7 +68,6 @@ class Simulator(ABC, VectorEnv):
         """
         if seed is not None:
             torch.manual_seed(seed)
-            np.random.seed(seed)
 
         self.state = self.state_set.sample()
 

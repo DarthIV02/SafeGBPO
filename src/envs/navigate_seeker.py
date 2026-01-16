@@ -10,10 +10,10 @@ from cvxpylayers.torch import CvxpyLayer
 from jaxtyping import jaxtyped, Float, Bool
 from torchvision.transforms.functional import to_tensor
 
-import sets as sets
+import src.sets as sets
 from envs.simulators.seeker import SeekerEnv
 from envs.interfaces.safe_action_env import SafeActionEnv
-from learning_algorithms.components.coupled_tensor import CoupledTensor
+from src.learning_algorithms.components.coupled_tensor import CoupledTensor
 
 
 class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
@@ -45,7 +45,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                  min_radius: float,
                  max_radius: float,
                  draw_safe_action_set: bool,
-                 polytopic_approach: bool,
+                 safe_action_polytope: bool,
                  ):
         """
         Initialize the NavigateSeekerEnv.
@@ -72,7 +72,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         self.min_radius = min_radius
         self.max_radius = max_radius
         self.draw_safe_action_set = draw_safe_action_set
-        self.polytope = polytopic_approach
+        self.safe_action_polytope = safe_action_polytope
 
         self.obstacles: list[sets.Ball] = [sets.Ball(torch.empty((num_envs, 2)), torch.empty(num_envs)) for _ in
                                            range(num_obstacles)]
@@ -85,15 +85,13 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
         self.generator_layer = None
 
-        if not self.polytope:
+        if not self.safe_action_polytope:
             self.last_safe_action_set: sets.Zonotope = sets.Zonotope(torch.zeros(self.num_envs, self.state_dim),
                                                                      torch.zeros(self.num_envs, self.state_dim,
                                                                                  self.num_action_gens))
-            self.shape = sets.Zonotope
         else:
-            self.last_safe_action_set: sets.HPolytope = sets.HPolytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
+            self.last_safe_action_set: sets.Polytope = sets.Polytope(A=torch.zeros(self.num_envs, self.state_dim, self.state_dim),
                                                                      b=torch.zeros(self.num_envs, self.state_dim))
-            self.shape = sets.HPolytope
 
     @jaxtyped(typechecker=beartype)
     def reset(self, seed: Optional[int] = None) -> tuple[
@@ -349,6 +347,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
     def render(self) -> list[Tensor]:
         """
         Render all environments.
+        For every action -> render is called.
 
         Returns:
             A list of rendered frames for each environment.
@@ -357,6 +356,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         goal = self.goal.detach().cpu()
 
         frames = []
+
+        # Restart the safe set
+        if self.draw_safe_action_set:
+            self.safe_action_set()
+
         for i in range(self.num_envs):
             img, draw = self.draw_seeker(state[i], goal[i])
 
@@ -377,38 +381,31 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                              fill=(0, 0, 0))
 
             if self.draw_safe_action_set:
-                # If invalid, recompute
-                if not hasattr(self, "last_safe_action_set") or self.last_safe_action_set is None:
-                    self.safe_action_set()
-                try:
-                    if self.last_safe_action_set.generator.sum() == 0:
-                        self.safe_action_set()
-                except:
-                    if self.last_safe_action_set.A.sum() == 0:
-                        self.safe_action_set()
-
                 overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
                 overlay_draw = ImageDraw.Draw(overlay)
                 
-                if self.polytope:
-                    A_i = self.last_safe_action_set.A[i]          # (num_constraints, dim)
-                    b_i = self.last_safe_action_set.b[i]          # (num_constraints,)
-                    s_i = self.state[i]                            # (dim,)
+                if self.safe_action_polytope:
+                    A_i = self.last_safe_action_set.A[i]
+                    b_i = self.last_safe_action_set.b[i]
+                    s_i = self.state[i]
 
-                    b_shifted = (b_i + torch.matmul(A_i, s_i))                  # (num_constraints,)
-                    draw_set = sets.HPolytope(A = A_i.unsqueeze(0),
+                    b_shifted = (b_i + torch.matmul(A_i, s_i))
+                    draw_set = sets.Polytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
                     result = draw_set.vertices()
 
+                    if result.shape[0] == 0:
+                        frames.append(torch.zeros(3, self.SCREEN_HEIGHT, self.SCREEN_WIDTH, dtype=torch.uint8))
+                        continue
+
                     try:
-                        vertices, mask = result       # function returned 2 values
+                        vertices, mask = result
                         vertices = vertices[mask].cpu().numpy()
                     except ValueError:
-                        vertices = result             # function returned only 1 value
+                        vertices = result
                         mask = None
 
-                    # Order CCW so polygon can be drawn without self-crossing
                     vertices = self.order_vertices_ccw(vertices).T
 
                 else:
@@ -429,20 +426,14 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
             frames.append((to_tensor(img) * 255).to(torch.uint8))
 
-        # invalidate the cached safe state set
-        try:
-            self.last_safe_action_set.generator *= 0.0
-        except:
-            self.last_safe_action_set.A *= 0.0
-
         return frames
 
     def order_vertices_ccw(self, points):
-        # If points are (2, N), transpose to (N, 2)
+        """Order them clockwise -> prevent bowtie shape"""
         transposed = False
         if points.shape[0] == 2:
             points = points.T
-            transposed = True  # remember original format
+            transposed = True
 
         center = points.mean(axis=0)
         angles = np.arctan2(points[:, 1] - center[1],
@@ -450,11 +441,10 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         order = np.argsort(angles)
         ordered = points[order]
 
-        # return in original shape
         return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
-    def safe_action_set(self) -> Union[sets.Zonotope, sets.HPolytope]:
+    def safe_action_set(self) -> Union[sets.Zonotope, sets.Polytope]:
         """
         Get the safe action set for the current state.
 
@@ -465,12 +455,12 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
             Cache the result if it is expensive to compute.
         """
         with torch.no_grad():
-            if self.polytope:
-                A, b = self.compute_A_b()
-                self.last_safe_action_set = self.shape(A=A, b=b)
+            if self.safe_action_polytope:
+                A, b = self.compute_polytope_generator()
+                self.last_safe_action_set = sets.Polytope(A=A, b=b)
             else:
                 generator = self.compute_generator()
-                self.last_safe_action_set = self.shape(self.action_set.center, generator)
+                self.last_safe_action_set = sets.Zonotope(self.action_set.center, generator)
 
             return self.last_safe_action_set
 
@@ -540,78 +530,79 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         return unscaled_generator * length.unsqueeze(1)
 
     @jaxtyped(typechecker=beartype)
-    def compute_A_b(self) -> tuple[Float[Tensor, "batch_dim num_constraints dim"], Float[Tensor, "batch_dim num_constraints"]
-    ]:
-
+    def compute_polytope_generator(
+        self
+    ) -> tuple[Float[Tensor, "batch_dim num_constraints dim"], Float[Tensor, "batch_dim num_constraints"]]:
+        """
+        Compute the safe input set polytope for a batch of environments based on acorl repo (envs.constraints.seeker.compute_relevant_input_set()).
+        Returns A, b for each batch: { x | A x <= b }.
+        """
         batch = self.num_envs
         dim = self.state_dim
+        asi = self.action_set.generator[0].diag()
 
-        agent_position = self.state
+        agent_pos = self.state
         noise = self.noise_set.sample()
-
-        # ----- Boundary constraints -----
+        
+        # Boundary constraints
         boundary_size = (self.state_set.max - self.state_set.min) / 2
-
-        b_upper = boundary_size - agent_position               # (B, dim)
-        b_lower = boundary_size + agent_position               # (B, dim)
-        b_boundary = torch.cat([b_upper, b_lower], dim=1)      # (B, 2*dim)
+        b_upper = boundary_size - agent_pos
+        b_lower = boundary_size + agent_pos
+        b_boundary = torch.cat([b_upper, b_lower], dim=1)
 
         I = torch.eye(dim, device=self.state.device)
-        A_boundary_single = torch.cat([I, -I], dim=0)          # (2*dim, dim)
+        A_boundary_single = torch.cat([I, -I], dim=0)
         A_boundary = A_boundary_single.unsqueeze(0).repeat(batch, 1, 1)
 
-        # ----- Action constraints -----
-        asi = self.action_set.generator[0].diag()              # (dim,)
-        b_action = torch.cat([asi, asi], dim=0).repeat(batch, 1)   # (B, 2*dim) # Not sure for the asi thingy
-
-        A_action_single = torch.cat([-I, I], dim=0)                # (2*dim, dim)
+        # Action constraints
+        b_action = torch.cat([asi, asi], dim=0).unsqueeze(0).repeat(batch, 1)
+        A_action_single = torch.cat([-I, I], dim=0)
         A_action = A_action_single.unsqueeze(0).repeat(batch, 1, 1)
 
-        # ----- Combine fixed constraints -----
-        b_fixed = torch.cat([b_boundary, b_action], dim=1)     # (B, 4*dim)
-        A_fixed = torch.cat([A_boundary, A_action], dim=1)     # (B, 4*dim, dim)
+        # Combine fixed constraints
+        b_fixed = torch.cat([b_boundary, b_action], dim=1)
+        A_fixed = torch.cat([A_boundary, A_action], dim=1)
 
-        # ----- Obstacle constraints (Depends on each environment) -----
-
-        # Compute max number of obstacle constraints per batch
+        # Obstacle constraints
         max_obs_constraints = self.obstacle_centers.tensor.shape[0]
-
-        # Prepare padded tensors
         total_constraints = 4*dim + max_obs_constraints
-        A_padded = torch.zeros(batch, total_constraints, dim, device=self.state.device)
-        # Padding with inf so that it can return as a complete tensor
-        b_padded = torch.full((batch, total_constraints), float('inf'), device=self.state.device) 
 
-        # Copy fixed constraints
+        A_padded = torch.zeros(batch, total_constraints, dim, device=self.state.device)
+        b_padded = torch.full((batch, total_constraints), float('inf'), device=self.state.device)
+
         A_padded[:, :4*dim, :] = A_fixed
         b_padded[:, :4*dim] = b_fixed
+        threshold = (torch.sqrt(torch.tensor(dim, device=self.state.device)) * (asi[0] + noise[:, 0]))
 
-        # Fill obstacle constraints
-        for b in range(batch):
-            obs_idx = 4*dim
-            for c in range(max_obs_constraints):
-                center = self.obstacle_centers.tensor[c, b]
-                radius = float(self.obstacle_radii.tensor[c, b])
-                dist = torch.linalg.norm(center - agent_position[b])
-                threshold = np.sqrt(dim) * (asi[0] + noise[b, 0])
+        B, D = agent_pos.shape
+        centers = self.obstacle_centers.tensor.permute(1, 0, 2)
+        radii = self.obstacle_radii.tensor.permute(1, 0)
 
-                if dist - radius > threshold:
-                    continue
+        # Distance to obstacle
+        agent = agent_pos[:, None, :] 
+        a = centers - agent
+        norm_a = torch.linalg.norm(a, dim=-1, keepdim=True)
+        dist = torch.linalg.norm(a, dim=-1)
+        a_normalized = torch.zeros_like(a)
+        valid = norm_a > 1e-8
+        a_normalized[valid.expand_as(a)] = (a / norm_a)[valid.expand_as(a)]
 
-                b_obs, A_obs = self._halfspace_constraint(agent_position[b], center, radius)
-                A_padded[b, obs_idx, :] = A_obs
-                b_padded[b, obs_idx] = b_obs
-                obs_idx += 1
+        # Threshold condition
+        # far_mask = True means obstacle is too far and should be skipped
+        far_mask = (dist - radii) > threshold[:, None]
+        near_mask = ~far_mask
+
+        b_val = dist - radii - noise[:, 0:1]
+
+        A_obs = torch.zeros((B, max_obs_constraints, D), device=agent_pos.device, dtype=agent_pos.dtype)
+        b_obs = torch.full((B, max_obs_constraints), float('inf'), device=agent_pos.device, dtype=agent_pos.dtype)
+
+        A_obs[near_mask] = a_normalized[near_mask]
+        b_obs[near_mask] = b_val[near_mask]
+
+        start = 4 * dim
+        end = start + max_obs_constraints
+        A_padded[:, start:end, :] = A_obs
+        b_padded[:, start:end] = b_obs
 
         return A_padded, b_padded
-
-    @jaxtyped(typechecker=beartype)
-    def _halfspace_constraint(
-        self, agent_position: Float[Tensor, "{self.action_dim}"], obstacle_position: Float[Tensor, "{self.action_dim}"], obstacle_radius: float
-    ):
-        a = obstacle_position - agent_position
-        a = a / torch.linalg.norm(a)
-        b = torch.linalg.norm(obstacle_position - agent_position)
-        b = b - obstacle_radius 
-        #b -= self.env_config.noise
-        return b, a

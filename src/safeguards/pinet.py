@@ -10,41 +10,7 @@ from torch.func import jacrev, vmap
 import torch.nn.functional as F
 
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
-
-###########################################
-# Constraint primitives
-###########################################
-
-@dataclass
-class HyperplaneConstraint:
-    """
-    Equality constraint of the form A x = b.
-
-    Used for projecting lifted variables onto the ADMM equality subspace.
-    """
-    A: Tensor  # (B, m, n)
-    b: Tensor  # (B, m, 1)
-    
-    def __init__(self, A, b):
-        with torch.no_grad():
-            Apinv = torch.linalg.pinv(A)
-            B, m, n = A.shape
-            self.P = torch.eye(n).expand(B, n, n) - torch.bmm(Apinv, A)
-            self.c = torch.bmm(Apinv, b)
-        self.P = self.P.detach()    
-        self.c = self.c.detach()
-
-    def project(self, y: Tensor) -> Tensor:
-        """
-        Project onto the affine subspace {x | A x = b}.
-
-        Args:
-            y: Input tensor.
-
-        Returns:
-            Projected tensor satisfying A x = b.
-        """
-        return torch.bmm(self.P, y) + self.c
+import src.sets as sets
 
 @dataclass
 class BoxConstraint:
@@ -70,9 +36,6 @@ class BoxConstraint:
         """
         return torch.clamp(y, self.lb, self.ub)
 
-# ---------------------------------------------------------------------------
-#                            PiNet Safeguard
-# ---------------------------------------------------------------------------
 class PinetSafeguard(Safeguard):
 
     @jaxtyped(typechecker=beartype)
@@ -96,18 +59,11 @@ class PinetSafeguard(Safeguard):
 
         self.sigma = sigma
         self.omega = omega
-        self.bwd_method = bwd_method
         self.fpi = fpi        
         self.save_dim = False
 
-        if not self.env.polytope:
+        if not self.env.safe_action_polytope:
             raise Exception("Polytope attribute has to be True")
-
-    def safeguard_metrics(self):
-        return super().safeguard_metrics()  | {
-            "pre_ineq_violation": self.pre_constraint_violation.mean().item(),
-            "post_ineq_violation": self.post_constraint_violation.mean().item(),
-        }
     
     @jaxtyped(typechecker=beartype)
     def safeguard(
@@ -128,7 +84,7 @@ class PinetSafeguard(Safeguard):
         action = action.unsqueeze(2)
 
         # Linear constraints A x <= b
-        A, b = self.env.compute_A_b()
+        A, b = self.env.compute_polytope_generator()
 
         if not self.save_dim:
             # Save frequently used variables
@@ -146,17 +102,11 @@ class PinetSafeguard(Safeguard):
             
             self.save_dim = True
 
-        x = torch.bmm(A, action) - b.unsqueeze(-1)
-        self.pre_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
-
         y_safe = self._run_projection(
             action=action,
             A=A, 
             b=b 
         )
-
-        x = torch.bmm(A, y_safe.unsqueeze(2)) - b.unsqueeze(-1)
-        self.post_constraint_violation = torch.relu(x).square().sum(dim=(1, 2))
 
         return y_safe
 
@@ -190,14 +140,11 @@ class PinetSafeguard(Safeguard):
         Ax = torch.bmm(A, x)
         return torch.cat([x, Ax], dim=1)
 
-    # -------------------------------------------------------------------------------
-    # ADMM projection wrapped in a torch.autograd.Function with implicit backward
-    # -------------------------------------------------------------------------------
     def _run_projection(
         self,
-        action: Tensor,         # (B, D, 1)
-        A: Tensor,              # (B, m, D)
-        b: Tensor,              # (B, m)
+        action: Tensor,
+        A: Tensor,
+        b: Tensor,
     ) -> Tensor:
         """
         Run ADMM projection with chosen backward method.
@@ -216,48 +163,21 @@ class PinetSafeguard(Safeguard):
             b.unsqueeze(2)
         ], dim=1)
 
-        self.eq = HyperplaneConstraint(Aeq, self.beq)
+        self.eq = sets.Hyperplane(Aeq, self.beq)
         self.box = BoxConstraint(self.lb, ub)
 
-        if self.bwd_method == "implicit":
-            y_safe = _ProjectImplicitFn.apply(
-                self._elevate(action, A),       # yraw
-                self._run_admm,                 # step_iteration
-                self.eq.project,                # step_final
-                int(D),                         # og_dim
-                total_dim,                      # dim_lifted
-                self.n_iter_admm,               # n_iter
-                self.n_iter_bwd,                # n_iter_bwd
-                self.fpi,                       # fpi
-            )
-        
-        elif self.bwd_method == "unroll":
-            y_safe = self.project_unroll(
-                yraw = self._elevate(action, A), # yraw
-                step_iteration = self._run_admm, # step_iteration
-                step_final = self.eq.project,    # step_final
-                og_dim = int(D),                 # og_dim
-                n_iter = self.n_iter_admm,       # n_iter
-            )
-        
-        else:
-            raise ValueError(f"Unknown bwd_method: {self.bwd_method}")
+        y_safe = _ProjectImplicitFn.apply(
+            self._elevate(action, A),
+            self._run_admm,
+            self.eq.project,
+            int(D),
+            total_dim,
+            self.n_iter_admm,
+            self.n_iter_bwd,
+            self.fpi,
+        )
 
         return y_safe
-
-    def project_unroll(self, yraw,
-                step_iteration, step_final, og_dim, n_iter, **kwargs):
-
-        """
-        Fully unrolled ADMM projection (autograd-tracked).
-        """
-        with torch.enable_grad():
-            sK = torch.zeros_like(yraw, requires_grad=True)
-            sK = step_iteration(sK, yraw, n_iter)
-            y = step_final(sK)
-            result = y[:, :og_dim].squeeze(2)
-
-        return result
 
 class _ProjectImplicitFn(torch.autograd.Function):
 

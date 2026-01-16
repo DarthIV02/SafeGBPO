@@ -4,7 +4,7 @@ from jaxtyping import jaxtyped
 
 from envs.simulators.interfaces.simulator import Simulator
 from learning_algorithms.interfaces.learning_algorithm import LearningAlgorithm
-from learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
+from src.learning_algorithms.components.coupled_buffer import CoupledBuffer, CoupledBufferBatch
 
 
 class PPO(LearningAlgorithm):
@@ -148,19 +148,7 @@ class PPO(LearningAlgorithm):
                                                  1 + self.clip_coef)
         policy_loss = torch.max(loss, loss_clamped).mean() - self.ent_coef * entropy.mean()
 
-        ### Yasin Tag: the next part potentially has to be modified for the benchmarks
-
-        ## Yasin note: here the regularisation term is added from the paper for the properties of the safeguarding methods
-        
-        ## Paper note: 
-        ## To regain a gradient in the mapping direction and compensate for the resulting rank-deficient Jacobian,
-        ## which violates Property P3, we augment the policy loss function lr(as, s) with a regularisation term [18, Eq. 16]
-        ## l(a, s, as) = lr(as, s) + cd ∥as − a∥^2_2. (16)
-
-
         if self.buffer.store_safe_actions:
-            # policy_loss += self.regularisation_coefficient * torch.nn.functional.mse_loss(
-            #     self.buffer.safe_actions.tensor, self.buffer.actions.tensor)
             policy_loss += self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         self.policy_optim.zero_grad()

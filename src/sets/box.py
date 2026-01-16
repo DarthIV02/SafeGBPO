@@ -5,8 +5,8 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 from torch import Tensor
 
-from sets.interface.convex_set import ConvexSet
-from sets.zonotope import Zonotope
+from src.sets.interface.convex_set import ConvexSet
+from src.sets.zonotope import Zonotope
 
 
 class Box(Zonotope):
@@ -85,7 +85,7 @@ class Box(Zonotope):
         Returns:
             True if the point is contained in the box, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, Tensor):
             center = other - self.center
@@ -118,7 +118,7 @@ class Box(Zonotope):
         Returns:
             True if other intersects with the box, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)
@@ -153,7 +153,6 @@ class Box(Zonotope):
             return (projection_len <= self.edge_len + supports).all(dim=1) & \
                 (other_projection_len <= other_edge_len + other_supports).all(dim=1)
 
-        # WARNING: NOT SURE IF THIS IS MATHEMATICALLY SOUND
         elif isinstance(other, sets.Polytope):
             """
             Parallel Box-Polytope intersection using ray-hyperplane method.
@@ -162,13 +161,13 @@ class Box(Zonotope):
             batch = self.center.shape[0]
 
             # Rays from box centers to polytope center
-            poly_center = other.center().unsqueeze(0).expand(batch, -1)  # (batch, dim)
+            poly_center = other.center().unsqueeze(0).expand(batch, -1)
             dir_vec = poly_center - self.center
             dist = torch.norm(dir_vec, dim=1, keepdim=True)
-            dir_vec = dir_vec / (dist + 1e-8)  # normalized directions
+            dir_vec = dir_vec / (dist + 1e-8)
 
             # Compute intersection t_lower and t_upper for all rays
-            t_lower, t_upper = ray_hyperplane_intersections_parallel(
+            t_lower, t_upper = other.ray_hyperplane_intersections_parallel(
                 self.center, dir_vec, other.A, other.b
             )
 
