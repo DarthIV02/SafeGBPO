@@ -84,7 +84,7 @@ class FSNetSafeguard(Safeguard):
             raise NotImplementedError("FSNet only supports Polytope and Zonotope safe action sets.")
 
         # first setup the residuals by computing A and b matrices (Ay ≤ b) and equality matrices (Cy = d)
-        self.data.setup_resid()
+        self.data.setup_constraint_matrices()
 
         # prepocess the action to accommate the different safe set representations
         processed_action = self.data.pre_process_action(action)
@@ -96,14 +96,14 @@ class FSNetSafeguard(Safeguard):
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad) for better backpropagation
 
-        if torch.is_grad_enabled():
+        if torch.is_grad_enabled(): # training mode
             safe_action = self.solver(
                 None,
                 processed_action,
                 self.data,
                 **self.config_method
             )
-        else:
+        else: # evaluation mode
             with torch.enable_grad(): # ensure grad is enabled for solvers just like in FSNet codebase
                 safe_action = self.nondiff_solver(
                     None,
