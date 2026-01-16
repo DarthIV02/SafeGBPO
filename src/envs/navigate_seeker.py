@@ -374,7 +374,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                 screen_radius = radius * scale
 
                 draw.ellipse((x - screen_radius, y - screen_radius, x + screen_radius, y + screen_radius),
-                             fill=(108, 43, 109))
+                             fill=(0, 0, 0))
 
             if self.draw_safe_action_set:
                 # If invalid, recompute
@@ -422,7 +422,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     for v in vertices.T
                 ]
                 
-                color = (177, 60, 108, 64)
+                color = (255, 0, 0, 64)
                 overlay_draw.polygon(screen_vertices, fill=color)
 
                 img = Image.alpha_composite(img, overlay)
