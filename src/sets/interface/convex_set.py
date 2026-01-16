@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Self
 
-from torch import Tensor
+
+from torch import Tensor, zeros_like, relu
 from beartype import beartype
 from jaxtyping import jaxtyped, Float, Bool
 
@@ -79,3 +80,61 @@ class ConvexSet(ABC):
             True if other intersects with the convex set, False otherwise.
         """
         pass
+
+    @abstractmethod
+    def setup_constraints(self):
+        """
+        Setup any necessary data structures for computing residuals.
+        """
+        pass
+
+    def pre_process_action(self, action):
+        """
+        Pre-process the action for FSNet safeguarding.
+        Default implementation does nothing.
+        
+        Args:
+            action: The action to pre-process.  
+        Returns:
+            The pre-processed action.
+        """
+        return action
+    
+    def post_process_action(self, action):
+        """
+        Post-process the action after FSNet safeguarding.
+        Default implementation does nothing.
+        Args:
+            action: The action to post-process.
+        Returns:
+            The post-processed action.
+        """
+        return action
+    
+    def eq_resid(self, X: Tensor = None, Y: Tensor = None) -> Tensor:
+        """
+        Compute the residual for equality constraints Cy = d.
+        X exist for compatibility with FSNet interface which can handle input dependent constraints.
+        Args:
+            X: Optional input tensor (not used for convex sets).
+            Y: The tensor to check against the equality constraints.
+        Returns:
+            The residual tensor for the equality constraints.
+        """
+        if self.C is None or self.d is None:
+            raise AssertionError("Constraint matrices not set up. setup_constraints must be called before eq_resid")
+        return self.C @ Y.unsqueeze(2) - self.d.unsqueeze(2)
+
+    def ineq_resid(self, X: Tensor= None, Y: Tensor = None) -> Tensor:
+        """
+        Inequality residuals for Ay <= b constraints.
+
+        Args:
+            X: Not used.
+            Y: Action tensor of shape (batch_size, action_dim)
+        Returns:
+            Tensor of shape (batch_size, num_constraints) representing the violation amounts.
+        """
+        if self.A is None or self.b is None:
+            raise AssertionError("Constraint matrices not set up. setup_constraints must be called before ineq_resid")
+        return relu(self.A @ Y.unsqueeze(2) - self.b.unsqueeze(2)) 

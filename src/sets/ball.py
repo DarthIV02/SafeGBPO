@@ -162,3 +162,5 @@ class Ball(ConvexSet):
             max_violation = torch.clamp(signed_dist, min=0).max(dim=1).values
             return inside_mask | (max_violation <= self.radius)
 
+    def setup_constraints(self):
+        raise NotImplementedError("Linear constraint matrices not defined for Ball.")

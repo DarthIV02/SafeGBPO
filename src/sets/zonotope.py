@@ -348,7 +348,7 @@ class Zonotope(ConvexSet):
         return self.center[0].unsqueeze(1) + vert
 
 
-    def setup_resid(self):
+    def setup_constraints(self):
         """
         Setup the residuals for FSNet solver interface.
         Constructs the A, b, C, d  constraint matrices for the zonotope representation.
@@ -370,8 +370,9 @@ class Zonotope(ConvexSet):
                 torch.eye(dim).expand(batch_dim, dim, dim), 
                 -self.generator
             ], dim=2).detach() 
-        self.d = self.center.unsqueeze(2).detach() 
         
+        self.d = self.center.detach() 
+
         # for ineq constraints  Az <= b
         # A with shape (batch_dim, 2 * num_generators, dim + num_generators)
         # b with shape (batch_dim, 2 * num_generators, 1)
@@ -382,7 +383,7 @@ class Zonotope(ConvexSet):
             ], dim=2)
         
         self.A = torch.cat([A_half, -A_half], dim=1).detach()  
-        self.b = torch.ones((batch_dim, 2 * num_generators, 1)).detach()  
+        self.b = torch.ones((batch_dim, 2 * num_generators)).detach()  
 
     def pre_process_action(self, action):
         """
@@ -410,33 +411,3 @@ class Zonotope(ConvexSet):
         """
         return action[:, :self.dim]
     
-    def eq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-        Compute the residual for equality constraints Cy = d.
-        X exist for compatibility with FSNet interface which can handle input dependent constraints.
-        Args:
-            X: Optional input tensor (not used in this method).
-            Y: The tensor to check against the equality constraints.
-        Returns:
-            The residual tensor for the equality constraints.
-        """
-
-        return self.C @ Y.unsqueeze(2) - self.d
-
-    def ineq_resid(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-        Compute the residual for inequality constraints Ay <= b.
-        X exist for compatibility with FSNet interface which can handle input dependent constraints.
-        Args:
-            X: Optional input tensor (not used in this method).
-            Y: The tensor to check against the inequality constraints.
-        Returns:
-            The residual tensor for the inequality constraints.
-        """
-        return torch.relu(self.A @ Y.unsqueeze(2) - self.b)
-    
-    def constraint_violation(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-        Return whichever function makes sense
-        """
-        return self.eq_resid(X, Y)

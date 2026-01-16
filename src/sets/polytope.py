@@ -358,7 +358,7 @@ class Polytope(ConvexSet):
 
         return t_lower, t_upper
     
-    def setup_resid(self):
+    def setup_constraints(self):
         """
         Setup the equality and inequality residual functions for FSNet.
         The equality constraints are Cy = d which are trivially satisfied for H-Polytopes. C=d= None
@@ -367,56 +367,6 @@ class Polytope(ConvexSet):
         """
         self.A = self.A.detach()
         self.b = self.b.detach()
-    
-    def pre_process_action(self, action):
-        """
-        Pre-process the action for FSNet safeguarding.
-        For H-Polytopes, no pre-processing is needed.
-        
-        Args:
-            action: The action to pre-process.  
-        Returns:
-            The pre-processed action.
-        """
-        return action
-    
-    def post_process_action(self, action):
-        """
-        Post-process the action after FSNet safeguarding.
-        For H-Polytopes, no post-processing is needed.
-        Args:
-            action: The action to post-process.
-        Returns:
-            The post-processed action.
-        """
-        return action
-    
-    def eq_resid(self, X: torch.Tensor= None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-        Equality residuals are zero since H-Polytope has no equality constraints.
-        Args:
-            X: Not used.
-            Y: Action tensor of shape (batch_size, action_dim)
-        Returns:
-            Zero tensor of shape (batch_size, 0)
-        """
-        return torch.zeros_like(Y)
-
-    def ineq_resid(self, X: torch.Tensor= None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-
-        Inequality residuals for Ay <= b constraints.
-
-        Args:
-            X: Not used.
-            Y: Action tensor of shape (batch_size, action_dim)
-        Returns:
-            Tensor of shape (batch_size, num_constraints) representing the violation amounts.
-        """
-        return torch.relu(self.A @ Y.unsqueeze(2) - self.b.unsqueeze(2)) 
-    
-    def constraint_violation(self, X: torch.Tensor = None, Y: torch.Tensor = None) -> torch.Tensor:
-        """
-        Return whichever function makes sense
-        """
-        return self.ineq_resid(X, Y)
+        self.C = torch.zeros((self.batch_dim, 1, self.dim), device=self.A.device) 
+        self.d = torch.zeros((self.batch_dim, 1), device=self.A.device)
+   
