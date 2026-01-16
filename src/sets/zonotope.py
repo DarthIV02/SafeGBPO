@@ -348,7 +348,7 @@ class Zonotope(ConvexSet):
         return self.center[0].unsqueeze(1) + vert
 
 
-    def setup_constraint_matrices(self):
+    def setup_constraints(self):
         """
         Setup the residuals for FSNet solver interface.
         Constructs the A, b, C, d  constraint matrices for the zonotope representation.

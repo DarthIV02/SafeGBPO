@@ -83,7 +83,7 @@ class ConvexSet(ABC):
         pass
 
     @abstractmethod
-    def setup_constraint_matrices(self):
+    def setup_constraints(self):
         """
         Setup any necessary data structures for computing residuals.
         """
@@ -123,7 +123,7 @@ class ConvexSet(ABC):
             The residual tensor for the equality constraints.
         """
         if self.C is None or self.d is None:
-            raise AssertionError("Constraint matrices not set up. setup_constraint_matrices must be called before eq_resid")
+            raise AssertionError("Constraint matrices not set up. setup_constraints must be called before eq_resid")
         return self.C @ Y.unsqueeze(2) - self.d.unsqueeze(2)
 
     def ineq_resid(self, X: Tensor= None, Y: Tensor = None) -> Tensor:
@@ -137,5 +137,5 @@ class ConvexSet(ABC):
             Tensor of shape (batch_size, num_constraints) representing the violation amounts.
         """
         if self.A is None or self.b is None:
-            raise AssertionError("Constraint matrices not set up. setup_constraint_matrices must be called before ineq_resid")
+            raise AssertionError("Constraint matrices not set up. setup_constraints must be called before ineq_resid")
         return relu(self.A @ Y.unsqueeze(2) - self.b.unsqueeze(2)) 

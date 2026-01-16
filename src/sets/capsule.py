@@ -316,5 +316,5 @@ class Capsule(ConvexSet):
         return self.start + s1.unsqueeze(1) * (self.end - self.start), \
                start + s2.unsqueeze(1) * (end - start)
 
-    def setup_constraint_matrices(self):
+    def setup_constraints(self):
         raise NotImplementedError("Linear constraint matrices not defined for Ball.")

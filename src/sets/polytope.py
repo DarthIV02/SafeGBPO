@@ -379,7 +379,7 @@ class HPolytope(ConvexSet):
 
         return t_lower, t_upper
     
-    def setup_constraint_matrices(self):
+    def setup_constraints(self):
         """
         Setup the equality and inequality residual functions for FSNet.
         The equality constraints are Cy = d which are trivially satisfied for H-Polytopes. C=d= None
