@@ -17,11 +17,9 @@ class BoxConstraint:
     """
     Axis-aligned box constraint lb <= x <= ub.
     """
-    lb: Tensor  
     ub: Tensor  
 
-    def __init__(self, lb, ub):
-        self.lb = lb.detach()
+    def __init__(self, ub):
         self.ub = ub.detach()
 
     def project(self, y: Tensor) -> Tensor:
@@ -34,7 +32,7 @@ class BoxConstraint:
         Returns:
             Box-projected tensor.
         """
-        return torch.clamp(y, self.lb, self.ub)
+        return torch.clamp(y, None, self.ub)
 
 class PinetSafeguard(Safeguard):
 
@@ -84,21 +82,16 @@ class PinetSafeguard(Safeguard):
         action = action.unsqueeze(2)
 
         # Linear constraints A x <= b
-        A, b = self.env.compute_polytope_generator()
+        constraints = self.env.safe_action_set()
+        A, b = constraints.A, constraints.b
 
         if not self.save_dim:
             # Save frequently used variables
             Bbatch, m, D = A.shape
             total_dim = D + m
             
-            E = torch.zeros(Bbatch, D, D, device=A.device)
-            Z = torch.zeros(Bbatch, D, m, device=A.device)
             self.negI = -torch.eye(m, device=A.device).unsqueeze(0).repeat(Bbatch, 1, 1)
-            
-            self.top = torch.cat([E, Z], dim=2)
-            
             self.beq = torch.zeros(Bbatch, total_dim, 1, device=A.device)
-            self.lb = torch.full((Bbatch, total_dim, 1), -torch.inf, device=A.device)
             
             self.save_dim = True
 
@@ -155,8 +148,7 @@ class PinetSafeguard(Safeguard):
         Bbatch, m, D = A.shape
         total_dim = D + m
 
-        bottom = torch.cat([A, self.negI], dim=2)
-        Aeq = torch.cat([self.top, bottom], dim=1)
+        Aeq = torch.cat([A, self.negI], dim=2)
 
         ub = torch.cat([
             torch.full((Bbatch, D, 1),  torch.inf, device=A.device, dtype=A.dtype),

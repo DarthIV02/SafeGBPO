@@ -587,18 +587,17 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         valid = norm_a > 1e-8
         a_normalized[valid.expand_as(a)] = (a / norm_a)[valid.expand_as(a)]
 
-        # Threshold condition
-        # far_mask = True means obstacle is too far and should be skipped
         far_mask = (dist - radii) > threshold[:, None]
         near_mask = ~far_mask
 
         b_val = dist - radii - noise[:, 0:1]
 
-        A_obs = torch.zeros((B, max_obs_constraints, D), device=agent_pos.device, dtype=agent_pos.dtype)
+        # Shift to action-space: subtract dot(a, agent)
         b_obs = torch.full((B, max_obs_constraints), float('inf'), device=agent_pos.device, dtype=agent_pos.dtype)
+        b_obs[near_mask] = b_val[near_mask] - torch.sum(a_normalized[near_mask] * agent[near_mask], dim=-1)
 
+        A_obs = torch.zeros((B, max_obs_constraints, D), device=agent_pos.device, dtype=agent_pos.dtype)
         A_obs[near_mask] = a_normalized[near_mask]
-        b_obs[near_mask] = b_val[near_mask]
 
         start = 4 * dim
         end = start + max_obs_constraints
