@@ -129,13 +129,6 @@ class Zonotope(ConvexSet):
             The constraints for the zonotope-zonotope containment problem.
         """
 
-        ## Paper note: Determining the containment of a zonotope in another
-        ## zonotope is co-NP complete [63], but a sufficient condition for Z1 ⊆ Z2 is [64, Eq. 15]
-        ## 1 ≥ min γ∈Rn2 ,Γ∈Rn2×n1  ||Γ γ||∞ (8a) 
-        ## subject to G1 = G2Γ (8b) 
-        ## c2 − c1 = G2γ . (8c)
-        ## Both containment problems are linear.
-
         weights = cp.Variable(g2.shape[1])
         mapping = cp.Variable((g2.shape[1], g1.shape[1]))
 

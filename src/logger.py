@@ -151,15 +151,15 @@ class Logger:
             safe_action_set = self.eval_env.safe_action_set()
             safe_action_set.setup_resid()
             processed_action = safe_action_set.pre_process_action(action)
-            store_violation["pre_eq"] += safe_action_set.eq_resid(None, processed_action).square().mean().item()
-            store_violation["pre_ineq"] += safe_action_set.ineq_resid(None, processed_action).square().mean().item()
+            store_violation["pre_eq"] += safe_action_set.equality_constraint_violation(None, processed_action).square().mean().item()
+            store_violation["pre_ineq"] += safe_action_set.inequality_constraint_violation(None, processed_action).square().mean().item()
             store_violation["pre_cv"] += safe_action_set.constraint_violation(None, processed_action).square().mean().item()
             
             if hasattr(self.eval_env, "safe_action"):
                 safe_action = self.eval_env.safe_action
                 processed_safe_action = safe_action_set.pre_process_action(safe_action)
-                store_violation["post_eq"] += safe_action_set.eq_resid(None, processed_safe_action).square().mean().item()
-                store_violation["post_ineq"] += safe_action_set.ineq_resid(None, processed_safe_action).square().mean().item()
+                store_violation["post_eq"] += safe_action_set.equality_constraint_violation(None, processed_safe_action).square().mean().item()
+                store_violation["post_ineq"] += safe_action_set.inequality_constraint_violation(None, processed_safe_action).square().mean().item()
                 store_violation["dif"] += torch.norm(safe_action - action, dim=1).mean().item()
                 store_violation["post_cv"] += safe_action_set.constraint_violation(None, processed_safe_action).square().mean().item()
 

@@ -26,22 +26,22 @@ class RayMaskConfig(SafeguardConfig):
 class FSNetConfig(SafeguardConfig): 
     regularisation_coefficient: float = 0.1
 
-    # FSNet genera solver config parameters
-    memory: int = 8
+    # FSNet general solver config parameters
+    lbfgs_history_size: int = 8
     max_iter: int = 8
     max_diff_iter: int = 4
 
     # fsnet lbfgs torch opt solver config parameters
-    lr: float = 1.0
-    max_norm: float = 2.0 # gradient clipping for stable training
+    lbfgs_torch_learning_rate: float = 1.0
+    gradient_clipping_max_norm: float = 2.0 # gradient clipping for stable training
 
     # fsnet lbfgs original solver config parameters
-    val_tol: float = 1e-6
-    grad_tol: float = 1e-6
-    scale: float = 1.0
-    c: float = 1e-4 
-    rho_ls: float = 0.5
-    max_ls_iter: int = 10
+    convergence_value_tolerance: float = 1e-6
+    convergence_gradient_tolerance: float = 1e-6
+    objective_scale: float = 1.0
+    line_search_armijo_c: float = 1e-4   
+    line_search_rho: float = 0.5
+    line_search_max_iter: int = 10
     verbose: bool = False
 
 
