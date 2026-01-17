@@ -36,11 +36,6 @@ class BoundaryProjectionSafeguard(Safeguard):
             The safeguarded action.
         """
 
-        ### Yasin Tag: 
-
-        ## Yasin note: example of the BP CVXPY optimisation to get the nearest action of the safe set 
-        ## min || a_s -a || is computed as a convex optimitation step to compute the nearest possible action
-     
         if self.boundary_layer is None:
             cp_action = cp.Parameter(self.action_dim)
             parameters = [cp_action]
@@ -48,20 +43,6 @@ class BoundaryProjectionSafeguard(Safeguard):
             cp_safe_action = cp.Variable(self.action_dim)
 
             objective = cp.Minimize(cp.sum_squares(cp_action - cp_safe_action))
-
-            ## Yasin note:  
-            ## with the feasibility_constraints the model basically constructs the constraint from the zonotope in the env to be used cvxpy
-            ## the feasibility_constraints just looks if the action is inside the in the defined minimum and maximum possivle values 
-            ## action_safety_constraints: if the point is in the zonotope Z = {c + Gβ | ∥β∥∞ ≤ 1} = ⟨c, G⟩
-            ## state_safety_constraints_ or wioth the generator if the generated zonotope of the possible actions is inside the safety zonotope
-
-            ## Paper note: Determining the containment of a zonotope in another
-            ## zonotope is co-NP complete [63], but a sufficient condition for Z1 ⊆ Z2 is [64, Eq. 15]
-            ## 1 ≥ min γ∈Rn2 ,Γ∈Rn2×n1  ||Γ γ||∞ (8a) 
-            ## subject to G1 = G2Γ (8b) 
-            ## c2 − c1 = G2γ . (8c)
-            ## Both containment problems are linear.
-
 
             constraints = self.feasibility_constraints(cp_safe_action)
             if self.action_constrained:

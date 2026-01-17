@@ -79,22 +79,14 @@ class RayMaskSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
-        ### Yasin Tag: 
 
-        ## Yasin note:  
-        ## cvxpy optimisation happens here either through the compute_distances or before with approximation through the zonotopic expansion + compute_distances
-        ## the optimisation then gives use both feasible and safe distances that stull have to be added to get the safe action 
-        ## the constraints are from the zonotopes constructs is  just c +G ß | ||ß||<=1 to be then used for cvxpy
-        
         if self.state_constrained:
             safe_center, safe_dist, feasible_dist = self.distance_approximations(action)
         else:
-            #print(self.env.safe_action_set())
             safe_center = self.env.safe_action_set().center
             safe_dist, feasible_dist = self.compute_distances(action, safe_center, self.env.safe_action_set().generator)
 
         action_dist = torch.linalg.vector_norm(action - safe_center, dim=1, ord=2, keepdim=True)
-        #self.pre_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
         directions = (action - safe_center) / (action_dist + 1e-8)
 
         central = action_dist < 1e-8
@@ -104,9 +96,6 @@ class RayMaskSafeguard(Safeguard):
             safe_center + directions * self.radial_mapping(action_dist, safe_dist, feasible_dist)
         )
 
-        #action_dist = torch.linalg.vector_norm(safe_action - safe_center, dim=1, ord=2, keepdim=True)
-        #self.post_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
-        
         return safe_action
 
     @jaxtyped(typechecker=beartype)

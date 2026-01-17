@@ -177,7 +177,6 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             list: The constraints.
         """
-        ## Yasin note: just looks if the action is inside the in the defined minimum and maximum possivle values
         
         return [
             self.env.action_set.min[0, :].cpu().numpy() <= action,
@@ -202,13 +201,13 @@ class Safeguard(VectorActionWrapper, ABC):
         safe_action_center = cp.Parameter(self.action_dim)
         safe_action_generator = cp.Parameter((self.action_dim, self.safe_action_gens))
 
-        if generator is None: ## Yasin note: BP
+        if generator is None: 
             constraints = sets.Zonotope.point_containment_constraints(
                 center,
                 safe_action_center,
                 safe_action_generator
             )
-        else: ## Yasin note: raymasks
+        else: 
             constraints = sets.Zonotope.zonotope_containment_constraints(
                 center,
                 generator,
