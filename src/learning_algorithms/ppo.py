@@ -149,7 +149,7 @@ class PPO(LearningAlgorithm):
         policy_loss = torch.max(loss, loss_clamped).mean() - self.ent_coef * entropy.mean()
 
         if self.buffer.store_safe_actions:
-            policy_loss += self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss += self.env.regularisation(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         self.policy_optim.zero_grad()
         policy_loss.backward()

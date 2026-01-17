@@ -409,17 +409,17 @@ class RayMaskSafeguard(Safeguard):
 
         return safe_center, safe_dist, feasible_dist
 
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+    def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
         
         """
-        Compute the safeguard loss for RayMask as the MSE between the original and safeguarded actions.
+        Compute the safeguard regularisation loss for RayMask as the MSE between the original and safeguarded actions.
         
         Args:
             action: The original action before safeguarding.
             safe_action: The safeguarded action.
 
         Returns:
-            The safeguard loss.
+            The safeguard regularisation loss.
         """
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)

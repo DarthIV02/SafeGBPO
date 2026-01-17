@@ -49,7 +49,6 @@ def run_experiment(cfg: Experiment, trial: Optional[optuna.Trial] = None) -> flo
     eval_env = env_class(**asdict(cfg.env))
 
     if cfg.safeguard:
-        ## Yasin note: here the enviroment is packaged into the Safeguard such that it is encapsulated and has the same properties as env.
         print("Model: ", cfg.safeguard.name)
         safeguard_class = import_module(modules, cfg.safeguard.name + "Safeguard")
         env = safeguard_class(env, **asdict(cfg.safeguard))
@@ -128,9 +127,6 @@ if __name__ == "__main__":
     for i, experiment in enumerate(experiment_queue):
         if experiment.num_runs == 0:
             print("[STATUS] Running hyperparameter search")
-            ## Yasin note: 
-            ##  optuna is used to train the hyperparameters defined in the learning algorithm config
-            ## this is not that important for us since we have the hyperparameters already but study.optimize() basically just does the run_experiment()
             study = optuna.create_study(direction="maximize",
                                         sampler=optuna.samplers.TPESampler(),
                                         pruner=optuna.pruners.HyperbandPruner(),

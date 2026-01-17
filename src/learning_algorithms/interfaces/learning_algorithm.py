@@ -86,8 +86,7 @@ class LearningAlgorithm(ABC):
 
             additional_metrics = self._learn_episode_additional_metrics()
             with torch.no_grad():
-                if logger:
-                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
+                logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
@@ -106,7 +105,8 @@ class LearningAlgorithm(ABC):
     @jaxtyped(typechecker=beartype)
     def _learn_episode_additional_metrics(self) -> dict[str, float]:
         """
-        Get metrics for the learning algorithm.
+        Get metrics for the learning algorithm. 
+        If the learning algorithm has no additional metrics, return an empty dictionary.
 
         Returns:
             A dictionary of metrics.

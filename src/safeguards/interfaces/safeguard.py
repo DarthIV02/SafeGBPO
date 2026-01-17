@@ -105,17 +105,17 @@ class Safeguard(VectorActionWrapper, ABC):
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
-    def safe_guard_loss(self,
+    def regularisation(self,
                         action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
                         safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
                         ) -> Float[Tensor, "{self.batch_dim}"]:
         """
-        Compute the safeguard loss for the given action.
+        Compute the safeguard regularisation loss for the given action.
 
         Args:
             action: The action to compute the loss for.
         Returns:
-            The safeguard loss.
+            The safeguard regularisation loss.
         """
         pass
 
@@ -128,6 +128,7 @@ class Safeguard(VectorActionWrapper, ABC):
             A dictionary of metrics.
         """
         return {
+            "interventions":        self.interventions,
             "dist_safe_action":     self.dist_safe_action,
             "pre_eq_violation":     self.pre_eq_violation,
             "pre_ineq_violation":   self.pre_ineq_violation,
@@ -228,12 +229,6 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             The constraints and parameters.
         """
-
-        ## Paper note: 
-        ## One method we discuss in particular is obtaining safe state sets via robust control invariant sets [46], which
-        ## guarantee the existence of an invariance-enforcing controller that can keep all future states within the safe set.
-        ## This is achieved by enclosing the dynamics at the current state by a linear transition function with a noise zonotope* W = ⟨cW, GW⟩ ⊂ R* dS , 
-        ## such that:*Si+1(ai , si) = M ai ⊕ ⟨c + cW, GW⟩ , (10) where c is the offset and M the Jacobian of the linearisation. 
 
         safe_state_center = cp.Parameter(self.state_dim)
         safe_state_generator = cp.Parameter((self.state_dim, self.safe_state_gens))

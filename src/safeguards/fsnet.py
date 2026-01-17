@@ -72,10 +72,8 @@ class FSNetSafeguard(Safeguard):
         """
 
         # for FSNet create a data object that contains the constraint representation and residual functions
-        # for this implementation we implement it from the convex safe action set in the env
+        # for this implementation we implement it from the safe action set in the env, using convex set constraints
         self.data = self.safe_action_set()
-        if not isinstance(self.data, (Polytope, Zonotope)):
-            raise NotImplementedError("FSNet only supports Polytope and Zonotope safe action sets.")
 
         self.data.setup_constraints()
 
@@ -113,22 +111,19 @@ class FSNetSafeguard(Safeguard):
         safe_action = self.data.post_process_action(safe_action)
         return safe_action
 
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+    def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
         """
-        Compute the safeguard loss for FSNet.
+        Compute the safeguard regularisation loss for FSNet.
         Args:
             action: The original action before safeguarding.
             safe_action: The safeguarded action.
         Returns:
-            The safeguard loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
+            The safeguard regularisation loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
 
-        # compute the safeguard loss
         loss = self.regularisation_coefficient/2 * torch.nn.functional.mse_loss(safe_action, action) 
         
-        # add penalty for residual violations as defined in FSNet paper practical implementation
-        # for good backpropagation, only add penalty if the mean violation is significant
         if self.pre_eq_violation.mean() > 1e-3:
             loss = loss + self.regularisation_coefficient * self.pre_eq_violation.mean()
         if self.pre_ineq_violation.mean() > 1e-3:
@@ -141,10 +136,10 @@ class FSNetSafeguard(Safeguard):
         """
 
         return  super().safeguard_metrics() | {
-            "pre_eq_violation":     self.pre_eq_violation.mean().item() if type(self.pre_eq_violation) == torch.Tensor else self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation.mean().item() if type(self.pre_ineq_violation) == torch.Tensor else self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation.mean().item() if type(self.post_eq_violation) == torch.Tensor else self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation.mean().item() if type(self.post_ineq_violation) == torch.Tensor else self.post_ineq_violation,
+            "pre_eq_violation":     self.pre_eq_violation,
+            "pre_ineq_violation":   self.pre_ineq_violation,
+            "post_eq_violation":    self.post_eq_violation,
+            "post_ineq_violation":  self.post_ineq_violation,
         }
     
 #################################################

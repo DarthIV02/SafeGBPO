@@ -134,7 +134,7 @@ class SHAC(LearningAlgorithm):
         exponent = torch.arange(self.len_trajectories + 2).view(-1, 1).repeat(1, self.env.num_envs)
 
         for end, env in self.buffer.terminals.nonzero():
-            exponent[end + 1:, env] = exponent[end + 1:, env] - (end + 1)
+            exponent[end + 1:, env] -= end + 1
 
         discount = self.GAMMA ** exponent
         values = torch.where(self.buffer.terminals.tensor,
@@ -145,8 +145,7 @@ class SHAC(LearningAlgorithm):
         policy_loss = -(discount * values).sum() / normalisation
         
         if self.buffer.store_safe_actions:
-            safe_guard_loss = self.env.safe_guard_loss(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
-            policy_loss = policy_loss + safe_guard_loss
+            policy_loss += self.env.regularisation(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
 
         policy_loss.backward()
         
@@ -252,5 +251,5 @@ class SHAC(LearningAlgorithm):
         """
         with torch.no_grad():
             for target_param, param in zip(self.target_value_function.parameters(), self.value_function.parameters()):
-                # safer, no .data
-                target_param.copy_(target_param * self.polyak_target + param * (1 - self.polyak_target))
+                target_param.data.mul_(self.polyak_target)
+                target_param.data.add_((1 - self.polyak_target) * param.data)
