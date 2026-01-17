@@ -65,7 +65,7 @@ class Polytope(ConvexSet):
         b_single = torch.ones(2 * self.dim)                         # [2*dim]
         A = A_single.unsqueeze(0).repeat(self.batch_dim, 1, 1)
         b = b_single.unsqueeze(0).repeat(self.batch_dim, 1)
-        return HPolytope(A, b)
+        return Polytope(A, b)
 
     @jaxtyped(typechecker=beartype)
     def contains_point(
