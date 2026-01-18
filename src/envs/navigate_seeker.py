@@ -393,20 +393,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     draw_set = sets.Polytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
-                    result = draw_set.vertices()
+                    vertices = draw_set.vertices()
 
-                    if result.shape[0] == 0:
+                    if vertices.shape[0] == 0:
                         frames.append(torch.zeros(3, self.SCREEN_HEIGHT, self.SCREEN_WIDTH, dtype=torch.uint8))
                         continue
-
-                    try:
-                        vertices, mask = result
-                        vertices = vertices[mask].cpu().numpy()
-                    except ValueError:
-                        vertices = result
-                        mask = None
-
-                    vertices = self.order_vertices_ccw(vertices).T
 
                 else:
                     draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
@@ -428,20 +419,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
         return frames
 
-    def order_vertices_ccw(self, points):
-        """Order them clockwise -> prevent bowtie shape"""
-        transposed = False
-        if points.shape[0] == 2:
-            points = points.T
-            transposed = True
 
-        center = points.mean(axis=0)
-        angles = np.arctan2(points[:, 1] - center[1],
-                            points[:, 0] - center[0])
-        order = np.argsort(angles)
-        ordered = points[order]
-
-        return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
     def safe_action_set(self) -> Union[sets.Zonotope, sets.Polytope]:
@@ -587,17 +565,18 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
         valid = norm_a > 1e-8
         a_normalized[valid.expand_as(a)] = (a / norm_a)[valid.expand_as(a)]
 
+        # Threshold condition
+        # far_mask = True means obstacle is too far and should be skipped
         far_mask = (dist - radii) > threshold[:, None]
         near_mask = ~far_mask
 
         b_val = dist - radii - noise[:, 0:1]
 
-        # Shift to action-space: subtract dot(a, agent)
-        b_obs = torch.full((B, max_obs_constraints), float('inf'), device=agent_pos.device, dtype=agent_pos.dtype)
-        b_obs[near_mask] = b_val[near_mask] - torch.sum(a_normalized[near_mask] * agent[near_mask], dim=-1)
-
         A_obs = torch.zeros((B, max_obs_constraints, D), device=agent_pos.device, dtype=agent_pos.dtype)
+        b_obs = torch.full((B, max_obs_constraints), float('inf'), device=agent_pos.device, dtype=agent_pos.dtype)
+
         A_obs[near_mask] = a_normalized[near_mask]
+        b_obs[near_mask] = b_val[near_mask]
 
         start = 4 * dim
         end = start + max_obs_constraints

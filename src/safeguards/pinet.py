@@ -45,7 +45,6 @@ class PinetSafeguard(Safeguard):
         n_iter_bwd: int,
         sigma: float = 1.0,
         omega: float = 1.7,
-        bwd_method: str = "implicit",
         fpi: bool = False,
         **kwargs
     ):

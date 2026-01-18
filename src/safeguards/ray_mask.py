@@ -35,7 +35,6 @@ class RayMaskSafeguard(Safeguard):
                  regularisation_coefficient: float,
                  linear_projection: bool,
                  zonotopic_approximation: bool,
-                 polytopic_approximation: bool,
                  passthrough: bool,
                  **kwargs):
         """
@@ -53,11 +52,6 @@ class RayMaskSafeguard(Safeguard):
 
         if zonotopic_approximation:
             self.distance_approximations = self.zonotopic_approximation
-        elif polytopic_approximation:
-            self.distance_approximations = self.polytopic_approximation
-            self.state_constrained = True
-            if not self.env.safe_action_polytope:
-                raise Exception("Env also has to be polytope, change 'safe_action_polytope' parameter.")
         else:
             self.distance_approximations = self.orthogonal_approximation
 
@@ -89,12 +83,10 @@ class RayMaskSafeguard(Safeguard):
         if self.state_constrained:
             safe_center, safe_dist, feasible_dist = self.distance_approximations(action)
         else:
-            #print(self.env.safe_action_set())
             safe_center = self.env.safe_action_set().center
             safe_dist, feasible_dist = self.compute_distances(action, safe_center, self.env.safe_action_set().generator)
 
         action_dist = torch.linalg.vector_norm(action - safe_center, dim=1, ord=2, keepdim=True)
-        #self.pre_constraint_violation = torch.clamp(action_dist - safe_dist, min=0.0)
         directions = (action - safe_center) / (action_dist + 1e-8)
 
         central = action_dist < 1e-8
@@ -151,65 +143,6 @@ class RayMaskSafeguard(Safeguard):
         safe_center, safe_generator = self.zonotope_expansion()
         safe_dist, feasible_dist = self.compute_distances(action, safe_center, safe_generator)
         return safe_center, safe_dist, feasible_dist
-
-    @jaxtyped(typechecker=beartype)
-    def polytopic_approximation(
-        self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
-    ) -> tuple[
-        Float[Tensor, "{self.batch_dim} {self.action_dim}"],
-        Float[Tensor, "{self.batch_dim} 1"],
-        Float[Tensor, "{self.batch_dim} 1"],
-    ]:
-        """
-        Robust approximation of the safe action set using a polytope with non-degenerate distances.
-        """
-        batch, dim = action.shape
-        eps = 1e-6  # Minimum distance to avoid degeneracy
-
-        # ----- Compute polytope constraints -----
-        A, b = self.env.compute_polytope_generator()  # Shapes: (B, num_constraints, D), (B, num_constraints)
-        A = torch.nan_to_num(A, nan=0.0, posinf=1e6, neginf=-1e6)
-        b = torch.nan_to_num(b, nan=1e6, posinf=1e6, neginf=-1e6)
-
-        polytopes = sets.Polytope(A=A, b=b)
-
-        # ----- Compute centers safely -----
-        centers = polytopes.center()
-        safe_center = self.env.safe_action_set().center()
-        centers = torch.where(torch.isnan(centers), safe_center, centers)
-
-        # ----- Action space box constraints -----
-        low = self.env.action_set.min[:, :]
-        high = self.env.action_set.max[:, :]
-
-        # ----- Direction vector from center to action -----
-        v = action - centers
-        v_norm = torch.linalg.vector_norm(v, dim=1, keepdim=True)
-        directions = torch.where(
-            v_norm > eps,
-            v / v_norm,
-            torch.ones_like(v) / torch.sqrt(torch.tensor(dim, dtype=v.dtype))
-        )
-
-        # ----- Feasible distance along box -----
-        t_low = torch.where(directions != 0, (low - centers) / directions, torch.inf * torch.ones_like(centers))
-        t_high = torch.where(directions != 0, (high - centers) / directions, torch.inf * torch.ones_like(centers))
-        t_max_per_dim = torch.maximum(t_low, t_high)
-        t_max_per_dim = torch.where(torch.isnan(t_max_per_dim), torch.inf, t_max_per_dim)
-        t_exit = torch.clamp(torch.min(t_max_per_dim, dim=1, keepdim=True).values, min=eps)
-        feasible_boundary = centers + t_exit * directions
-        feasible_boundary = torch.max(torch.min(feasible_boundary, high), low)
-        feasible_dist = torch.clamp(t_exit * v_norm, min=eps)
-
-        # ----- Safe distance along polytope boundary -----
-        safe_boundary_points = polytopes.boundary_point(directions)
-        safe_boundary_points = torch.where(torch.isnan(safe_boundary_points), centers, safe_boundary_points)
-        safe_dist = torch.clamp(
-            torch.linalg.vector_norm(safe_boundary_points - centers, dim=1, keepdim=True),
-            min=eps
-        )
-
-        return centers, safe_dist, feasible_dist
 
     @jaxtyped(typechecker=beartype)
     def zonotope_expansion(self) -> tuple[

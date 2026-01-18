@@ -67,10 +67,6 @@ class LearningAlgorithm(ABC):
             logger: The logger to use for logging learning progress.
         """
 
-        ## Yasin note: 
-        ## this is the main function where the training happens for the policy. 
-        ## only self._learn_episode is important here and its defined  by the respective learning_algortithm like ppo4
-
         num_learn_episodes = interactions // self.interactions_per_episode
 
         policy_lr_update = 0

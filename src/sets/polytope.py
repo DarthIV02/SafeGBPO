@@ -112,7 +112,22 @@ class Polytope(ConvexSet):
             # In rare cases QHull fails for degenerate polytope
             V = np.empty((0, n))
 
-        return V
+        return self.order_vertices_ccw(V).T
+    
+    def order_vertices_ccw(self, points):
+        """Order them clockwise -> prevent bowtie shape"""
+        transposed = False
+        if points.shape[0] == 2:
+            points = points.T
+            transposed = True
+
+        center = points.mean(axis=0)
+        angles = np.arctan2(points[:, 1] - center[1],
+                            points[:, 0] - center[0])
+        order = np.argsort(angles)
+        ordered = points[order]
+
+        return ordered.T if transposed else ordered
 
     def center(self, idx: int | None = None) -> Float[Tensor, "batch_dim dim"]:
         """Computation of the Chebyshev center of an HPolyhedron HP via linear programming.
@@ -369,4 +384,3 @@ class Polytope(ConvexSet):
         self.b = self.b.detach()
         self.C = torch.zeros((self.batch_dim, 1, self.dim), device=self.A.device) 
         self.d = torch.zeros((self.batch_dim, 1), device=self.A.device)
-   
