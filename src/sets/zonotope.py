@@ -160,7 +160,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if the point is contained in the zonotope, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, Tensor):
             weights = cp.Variable((self.batch_dim, self.num_gens))
@@ -257,7 +257,7 @@ class Zonotope(ConvexSet):
         Returns:
             True if other intersects with the zonotope, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, sets.Ball):
             return other.intersects(self)
