@@ -76,6 +76,7 @@ class Polytope(ConvexSet):
             torch.ones(unpadded_shape, 1, device=A_i.device)
         ], dim=1)
 
+        # Works on torch tensors but on cpu only
         res = linprog(
             c, 
             A_ub=A_ub, 
@@ -181,9 +182,9 @@ class Polytope(ConvexSet):
 
         # Transform to numpy to use scipy linprog
 
-        c_np    = c.detach().cpu().numpy()
-        A_ub_np = A_ub.detach().cpu().numpy()
-        b_ub_np = b_ub.detach().cpu().numpy()
+        c_np    = c.detach().cpu()
+        A_ub_np = A_ub.detach().cpu()
+        b_ub_np = b_ub.detach().cpu()
 
         # Solve
         res = linprog(
