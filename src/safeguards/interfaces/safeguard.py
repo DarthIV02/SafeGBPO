@@ -27,12 +27,13 @@ class Safeguard(VectorActionWrapper, ABC):
     solver_args = {"solve_method": "Clarabel"}
 
     @jaxtyped(typechecker=beartype)
-    def __init__(self, env: SafeEnv, **kwargs):
+    def __init__(self, env: SafeEnv, regularisation_coefficient, **kwargs):
         """
         Args:
             env: A custom secured, pytorch-based environment.
         """
         super().__init__(env)
+        self.regularisation_coefficient = regularisation_coefficient
         self.batch_dim = self.env.num_envs
         self.state_dim = self.env.state_dim
         self.action_dim = self.env.action_dim

@@ -18,8 +18,7 @@ class BoundaryProjectionSafeguard(Safeguard):
     def __init__(self, env: SafeEnv,
                  regularisation_coefficient: float,
                 **kwargs):
-        Safeguard.__init__(self, env)
-        self.regularisation_coefficient = regularisation_coefficient
+        Safeguard.__init__(self, env, regularisation_coefficient)
         self.boundary_layer = None
 
     @jaxtyped(typechecker=beartype)

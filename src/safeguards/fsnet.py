@@ -48,9 +48,7 @@ class FSNetSafeguard(Safeguard):
                  env: SafeEnv, 
                  regularisation_coefficient: float,
                  **kwargs):
-        Safeguard.__init__(self, env)
-
-        self.regularisation_coefficient = regularisation_coefficient
+        Safeguard.__init__(self, env, regularisation_coefficient)
 
         # assume the remaining kwargs are solver config parameters
         self.method_config = kwargs
