@@ -7,7 +7,7 @@ class SafeguardConfig:
     @property
     def name(self) -> str:
         return self.__class__.__name__[:-6]
-
+    
 
 @dataclass
 class BoundaryProjectionConfig(SafeguardConfig):
@@ -18,8 +18,7 @@ class BoundaryProjectionConfig(SafeguardConfig):
 class RayMaskConfig(SafeguardConfig):
     regularisation_coefficient: float = 0.1
     linear_projection: bool = True
-    zonotopic_approximation: bool = False
-    polytopic_approximation: bool = False
+    zonotopic_approximation: bool = True
     passthrough: bool = False
 
 @dataclass
@@ -44,19 +43,9 @@ class FSNetConfig(SafeguardConfig):
     line_search_max_iter: int = 10
     verbose: bool = False
 
-
 @dataclass
 class PinetConfig(SafeguardConfig):
     regularisation_coefficient: float = 0.1
     n_iter_admm: int = 10
     n_iter_bwd: int = 10
-    bwd_method: str = "implicit"  # "implicit" or "unroll"
-    fpi: bool = False
-
-@dataclass
-class PinetJAXConfig(SafeguardConfig):
-    regularisation_coefficient: float = 0.1
-    n_iter_admm: int = 10
-    n_iter_bwd: int = 10
-    bwd_method: str = "implicit"  # "implicit" or "unroll"
     fpi: bool = False

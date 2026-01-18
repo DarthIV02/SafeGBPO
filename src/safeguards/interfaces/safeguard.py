@@ -105,7 +105,7 @@ class Safeguard(VectorActionWrapper, ABC):
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
-    def regularisation(self,
+    def safe_guard_loss(self,
                         action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
                         safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
                         ) -> Float[Tensor, "{self.batch_dim}"]:
@@ -117,7 +117,7 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             The safeguard regularisation loss.
         """
-        pass
+        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
     @jaxtyped(typechecker=beartype)
     def safeguard_metrics(self) -> dict[str, Any]:

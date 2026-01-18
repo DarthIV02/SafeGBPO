@@ -35,6 +35,11 @@ class BoundaryProjectionSafeguard(Safeguard):
             The safeguarded action.
         """
 
+        ### Yasin Tag: 
+
+        ## Yasin note: example of the BP CVXPY optimisation to get the nearest action of the safe set 
+        ## min || a_s -a || is computed as a convex optimitation step to compute the nearest possible action
+     
         if self.boundary_layer is None:
             cp_action = cp.Parameter(self.action_dim)
             parameters = [cp_action]
@@ -61,18 +66,3 @@ class BoundaryProjectionSafeguard(Safeguard):
 
         return safe_action
 
-
-    def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
-        """
-        Compute the safeguard regularisation loss for boundary projection as the MSE between the original and safeguarded actions.
-        
-        Args:
-            action: The original action before safeguarding.
-            safe_action: The safeguarded action.
-
-        Returns:
-            The safeguard regularisation loss.
-        """
-        
-        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)

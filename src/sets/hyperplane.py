@@ -89,3 +89,6 @@ class Hyperplane(ConvexSet):
             A tensor of sampled points from the convex set.
         """
         raise NotImplementedError("Sample for Hyperplane not implemented.")
+    
+    def setup_constraints(self):
+        return super().setup_constraints()

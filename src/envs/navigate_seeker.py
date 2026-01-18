@@ -393,20 +393,11 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                     draw_set = sets.Polytope(A = A_i.unsqueeze(0),
                                             b = b_shifted.unsqueeze(0))
                     draw_set._centers[0] = None
-                    result = draw_set.vertices()
+                    vertices = draw_set.vertices()
 
-                    if result.shape[0] == 0:
+                    if vertices.shape[0] == 0:
                         frames.append(torch.zeros(3, self.SCREEN_HEIGHT, self.SCREEN_WIDTH, dtype=torch.uint8))
                         continue
-
-                    try:
-                        vertices, mask = result
-                        vertices = vertices[mask].cpu().numpy()
-                    except ValueError:
-                        vertices = result
-                        mask = None
-
-                    vertices = self.order_vertices_ccw(vertices).T
 
                 else:
                     draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
@@ -428,20 +419,7 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
 
         return frames
 
-    def order_vertices_ccw(self, points):
-        """Order them clockwise -> prevent bowtie shape"""
-        transposed = False
-        if points.shape[0] == 2:
-            points = points.T
-            transposed = True
 
-        center = points.mean(axis=0)
-        angles = np.arctan2(points[:, 1] - center[1],
-                            points[:, 0] - center[0])
-        order = np.argsort(angles)
-        ordered = points[order]
-
-        return ordered.T if transposed else ordered
 
     @jaxtyped(typechecker=beartype)
     def safe_action_set(self) -> Union[sets.Zonotope, sets.Polytope]:
