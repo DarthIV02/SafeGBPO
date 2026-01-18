@@ -97,7 +97,7 @@ class Capsule(ConvexSet):
         Returns:
             A tensor of sampled points from the capsule.
         """
-        from sets.ball import Ball
+        from src.sets.ball import Ball
 
         t = torch.rand(self.start.shape[0], 1)
         line_samples = t * self.start + (1 - t) * self.end
@@ -115,7 +115,7 @@ class Capsule(ConvexSet):
         Returns:
             True if the point is contained in the capsule, False otherwise.
         """
-        import sets as sets
+        import src.sets as sets
 
         if isinstance(other, Tensor):
             closest_point = self.closest_point_on_line_segment(other)
