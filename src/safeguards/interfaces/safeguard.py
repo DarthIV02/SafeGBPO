@@ -105,7 +105,7 @@ class Safeguard(VectorActionWrapper, ABC):
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod
-    def safe_guard_loss(self,
+    def regularisation(self,
                         action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
                         safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
                         ) -> Float[Tensor, "{self.batch_dim}"]:
