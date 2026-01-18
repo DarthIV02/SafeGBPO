@@ -86,8 +86,7 @@ class LearningAlgorithm(ABC):
 
             additional_metrics = self._learn_episode_additional_metrics()
             with torch.no_grad():
-                if logger:
-                    logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
+                logger.on_learning_episode(eps, average_reward, policy_loss, value_loss, num_learn_episodes, additional_metrics=additional_metrics)
 
     @jaxtyped(typechecker=beartype)
     @abstractmethod

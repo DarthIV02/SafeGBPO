@@ -57,32 +57,6 @@ class Polytope(ConvexSet):
         else:
             raise TypeError(f"Invalid index type {type(idx)}")
 
-    @staticmethod
-    def from_unit_box(self) -> Self:
-        """Create batched unit boxes [-1, 1]^dim."""
-        eye = torch.eye(self.dim)
-        A_single = torch.cat([eye, -eye], dim=0)               # [2*dim, dim]
-        b_single = torch.ones(2 * self.dim)                         # [2*dim]
-        A = A_single.unsqueeze(0).repeat(self.batch_dim, 1, 1)
-        b = b_single.unsqueeze(0).repeat(self.batch_dim, 1)
-        return Polytope(A, b)
-
-    @jaxtyped(typechecker=beartype)
-    def contains_point(
-        self, points: Float[Tensor, "batch_dim dim"]
-    ) -> Bool[Tensor, "batch_dim"]:
-        """Check if each batched point lies inside its corresponding polytope."""
-        if points.shape != (self.batch_dim, self.dim):
-            raise ValueError(f"points must be [{self.batch_dim}, {self.dim}]")
-
-        # Compute A_i @ x_i <= b_i for each batch element
-        Ax = torch.einsum("bij,bj->bi", self.A, points)
-        return (Ax <= self.b + 1e-8).all(dim=1)
-
-    def contains(self, points: Float[Tensor, "batch_dim dim"]) -> Bool[Tensor, "batch_dim"]:
-        """Alias for contains_point()."""
-        return self.contains_point(points)
-
     def vertices(self) -> np.array:
         A = np.asarray(self.A[0].cpu())
         b = np.asarray(self.b[0].cpu())
@@ -213,71 +187,13 @@ class Polytope(ConvexSet):
         return ax
 
     @jaxtyped(typechecker=beartype)
-    def boundary_point(
-        self, directions: Float[Tensor, "batch_dim dim"]
-    ) -> Float[Tensor, "batch_dim dim"]:
-        """
-        Compute a boundary point along given directions for each batch.
-        Solves: max l s.t. A (center + l * dir) <= b
-        """
-
-        centers = self.center()
-        t_lower, t_upper = self.ray_hyperplane_intersections_parallel(
-            c=centers,
-            d=directions,
-            A=self.A,
-            b=self.b
-        )
-
-        # If ray does not intersect, clamp to zero displacement
-        valid = t_upper >= t_lower
-        t = torch.where(valid, t_upper, torch.zeros_like(t_upper))
-
-        return centers + t.unsqueeze(1) * directions
-
-    @jaxtyped(typechecker=beartype)
     def sample(self) -> Float[torch.Tensor, "{self.batch_dim} {self.dim}"]:
         """
         Sample a point approximately uniformly from the polytope Ax <= b.
         """
-        batch, num_constraints, dim = self.A.shape
+        raise NotImplementedError(
+                f"Sample method not implemented for Polytope")
 
-        x = self.center()
-
-        # Random direction per batch
-        dir_vec = torch.randn(batch, dim, device=self.device)
-        dir_vec = dir_vec / (torch.norm(dir_vec, dim=1, keepdim=True) + 1e-8)
-
-        # Compute intersection bounds t_lower <= t <= t_upper
-        Ad = torch.einsum("bij, bj -> bi", self.A, dir_vec)
-        Ax = torch.einsum("bij, bj -> bi", self.A, x)
-        c = self.b - Ax
-
-        t_lower = torch.full((batch,), -float("inf"), device=self.device)
-        t_upper = torch.full((batch,), float("inf"), device=self.device)
-
-        # For positive directions: A_i * dir > 0 → t ≤ (b_i - A_i x) / (A_i dir)
-        pos_mask = Ad > 1e-8
-        neg_mask = Ad < -1e-8
-
-        t_upper[pos_mask.any(dim=1)] = torch.min(
-            torch.where(pos_mask, c / (Ad + 1e-8), torch.full_like(c, float("inf"))),
-            dim=1
-        ).values
-
-        # For negative directions: A_i * dir < 0 → t ≥ (b_i - A_i x) / (A_i dir)
-        t_lower[neg_mask.any(dim=1)] = torch.max(
-            torch.where(neg_mask, c / (Ad + 1e-8), torch.full_like(c, -float("inf"))),
-            dim=1
-        ).values
-
-        t = torch.rand(batch, device=self.device) * (t_upper - t_lower) + t_lower
-
-        # New sampled point
-        sample = x + t.unsqueeze(1) * dir_vec
-        return sample
-
-    # WARNING: Should be double checked
     @jaxtyped(typechecker=beartype)
     def intersects(self, other: ConvexSet) -> Bool[Tensor, "{self.batch_dim}"]:
         """
@@ -301,77 +217,11 @@ class Polytope(ConvexSet):
             # Overapproximation 
             return other.box().intersects(self)
         elif isinstance(other, sets.Polytope):
-            batch, dim = self.center.shape # p1
-            epsilon = 1e-8
-
-            ray_dir = other.center - self.center
-            ray_norm = torch.norm(ray_dir, dim=1, keepdim=True)
-            ray_unit = ray_dir / (ray_norm + 1e-8)
-
-            # Compute intersection bounds for each polytope along the ray
-            t1_lower, t1_upper = self.ray_hyperplane_intersections_parallel(
-                c=self.center,
-                d=ray_unit,
-                A=self.A,
-                b=self.b,
-                epsilon=epsilon
-            )
-
-            t2_lower, t2_upper = self.ray_hyperplane_intersections_parallel(
-                c=other.center,
-                d=-ray_unit,
-                A=other.A,
-                b=other.b,
-                epsilon=epsilon
-            )
-
-            # Shift P2 intervals to the ray originating at P1 center
-            t2_lower_shifted = -t2_upper
-            t2_upper_shifted = -t2_lower
-
-            # Check interval overlap
-            intersects = (t1_upper >= t2_lower_shifted) & (t2_upper_shifted >= t1_lower)
-            
-            return intersects
-        
+             raise NotImplementedError(
+                f"Intersection check not implemented for {type(other)}")
         else:
             raise NotImplementedError(
                 f"Intersection check not implemented for {type(other)}")
-
-    def ray_hyperplane_intersections_parallel(
-        self,
-        c: torch.Tensor,
-        d: torch.Tensor,
-        A: torch.Tensor,
-        b: torch.Tensor,
-        epsilon: float = 1e-8
-    ):
-        """
-        Compute lower and upper t values along ray directions for multiple hyperplanes in parallel.
-        """
-        denom = torch.einsum("bd,bcd->bc", d, A)
-        numer = b - torch.einsum("bd,bcd->bc", c, A)
-
-        parallel = torch.abs(denom) < epsilon
-        denom_safe = denom.clone()
-        denom_safe[parallel] = 1.0
-
-        t = numer / denom_safe
-
-        t[parallel & (numer < 0)] = -float("inf")
-        t[parallel & (numer >= 0)] = float("inf")
-
-        t_lower = torch.max(
-            torch.where(denom < -epsilon, t, torch.full_like(t, -float("inf"))),
-            dim=1
-        ).values
-
-        t_upper = torch.min(
-            torch.where(denom > epsilon, t, torch.full_like(t, float("inf"))),
-            dim=1
-        ).values
-
-        return t_lower, t_upper
     
     def setup_constraints(self):
         """

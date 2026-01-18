@@ -12,28 +12,6 @@ import torch.nn.functional as F
 from safeguards.interfaces.safeguard import Safeguard, SafeEnv
 import src.sets as sets
 
-@dataclass
-class BoxConstraint:
-    """
-    Axis-aligned box constraint lb <= x <= ub.
-    """
-    ub: Tensor  
-
-    def __init__(self, ub):
-        self.ub = ub.detach()
-
-    def project(self, y: Tensor) -> Tensor:
-        """
-        Clamp input to the box bounds.
-
-        Args:
-            y: Input tensor.
-
-        Returns:
-            Box-projected tensor.
-        """
-        return torch.clamp(y, None, self.ub)
-
 class PinetSafeguard(Safeguard):
 
     @jaxtyped(typechecker=beartype)
@@ -86,12 +64,9 @@ class PinetSafeguard(Safeguard):
 
         if not self.save_dim:
             # Save frequently used variables
-            Bbatch, m, D = A.shape
-            total_dim = D + m
-            
+            Bbatch, m, D = A.shape            
             self.negI = -torch.eye(m, device=A.device).unsqueeze(0).repeat(Bbatch, 1, 1)
-            self.beq = torch.zeros(Bbatch, total_dim, 1, device=A.device)
-            
+            self.beq = torch.zeros(Bbatch, m, 1, device=A.device)
             self.save_dim = True
 
         y_safe = self._run_projection(
@@ -101,11 +76,6 @@ class PinetSafeguard(Safeguard):
         )
 
         return y_safe
-
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
-
-        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
     
     def _run_admm(self, sk, y_raw, steps):
         D = self.action_dim
@@ -120,7 +90,7 @@ class PinetSafeguard(Safeguard):
             reflect = 2 * zk - sk_iter
             numerator = addition + reflect[:, :D, :]
             reflect[:, :D, :] = numerator * denom
-            tk = self.box.project(reflect)
+            tk = self.box_project(reflect)
             sk_iter = sk_iter + self.omega * (tk - zk)
 
         return sk_iter
@@ -155,7 +125,7 @@ class PinetSafeguard(Safeguard):
         ], dim=1)
 
         self.eq = sets.Hyperplane(Aeq, self.beq)
-        self.box = BoxConstraint(self.lb, ub)
+        self.box_project = lambda y: torch.clamp(y, None, ub)
 
         y_safe = _ProjectImplicitFn.apply(
             self._elevate(action, A),

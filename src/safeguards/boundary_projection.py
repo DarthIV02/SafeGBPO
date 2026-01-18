@@ -21,7 +21,6 @@ class BoundaryProjectionSafeguard(Safeguard):
         Safeguard.__init__(self, env)
         self.regularisation_coefficient = regularisation_coefficient
         self.boundary_layer = None
-        self.num_interventions = 0
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -35,11 +34,6 @@ class BoundaryProjectionSafeguard(Safeguard):
         Returns:
             The safeguarded action.
         """
-
-        ### Yasin Tag: 
-
-        ## Yasin note: example of the BP CVXPY optimisation to get the nearest action of the safe set 
-        ## min || a_s -a || is computed as a convex optimitation step to compute the nearest possible action
      
         if self.boundary_layer is None:
             cp_action = cp.Parameter(self.action_dim)
@@ -48,20 +42,6 @@ class BoundaryProjectionSafeguard(Safeguard):
             cp_safe_action = cp.Variable(self.action_dim)
 
             objective = cp.Minimize(cp.sum_squares(cp_action - cp_safe_action))
-
-            ## Yasin note:  
-            ## with the feasibility_constraints the model basically constructs the constraint from the zonotope in the env to be used cvxpy
-            ## the feasibility_constraints just looks if the action is inside the in the defined minimum and maximum possivle values 
-            ## action_safety_constraints: if the point is in the zonotope Z = {c + Gβ | ∥β∥∞ ≤ 1} = ⟨c, G⟩
-            ## state_safety_constraints_ or wioth the generator if the generated zonotope of the possible actions is inside the safety zonotope
-
-            ## Paper note: Determining the containment of a zonotope in another
-            ## zonotope is co-NP complete [63], but a sufficient condition for Z1 ⊆ Z2 is [64, Eq. 15]
-            ## 1 ≥ min γ∈Rn2 ,Γ∈Rn2×n1  ||Γ γ||∞ (8a) 
-            ## subject to G1 = G2Γ (8b) 
-            ## c2 − c1 = G2γ . (8c)
-            ## Both containment problems are linear.
-
 
             constraints = self.feasibility_constraints(cp_safe_action)
             if self.action_constrained:
@@ -80,19 +60,3 @@ class BoundaryProjectionSafeguard(Safeguard):
         safe_action = self.boundary_layer(*parameters, solver_args=self.solver_args)[0]
 
         return safe_action
-
-
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
-        """
-        Compute the safeguard loss for boundary projection as the MSE between the original and safeguarded actions.
-        
-        Args:
-            action: The original action before safeguarding.
-            safe_action: The safeguarded action.
-
-        Returns:
-            The safeguard loss.
-        """
-        
-        return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)

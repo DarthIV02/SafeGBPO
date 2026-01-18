@@ -135,42 +135,8 @@ class Capsule(ConvexSet):
             # Over approximation of the zonotope by a box to lower computational complexity
             return self.contains(other.box())
         elif isinstance(other, sets.Polytope):
-            """
-            Check in parallel if a batch of capsules intersects a polytope.
-            """
-            epsilon = 1e-8,
-
-            # Compute capsule line segment direction
-            dir_vec = self.end[0] - self.start[0]
-            segment_len = torch.norm(dir_vec, dim=1, keepdim=True)
-            dir_unit = dir_vec / (segment_len + 1e-8)
-
-            # Cast rays from capsule start along segment direction
-            t_lower, t_upper = other.ray_hyperplane_intersections_parallel(
-                c=self.start[0],        
-                d=dir_unit,             
-                A=other.A,               
-                b=other.b,               
-                epsilon=epsilon
-            )
-
-            # Check if line segment intersects polytope
-            # The segment is [0, segment_len], so intersection exists if:
-            intersects_line = (t_upper >= 0) & (t_lower <= segment_len.squeeze(1))
-
-            # Compute closest approach distance if segment intersects partially
-            # Take t_clamped inside [0, segment_len] to compute closest point
-            t_clamped = torch.clamp(t_lower, min=0.0, max=segment_len.squeeze(1))
-            closest_point = self.start + dir_unit * t_clamped.unsqueeze(1)  # (batch, dim)
-
-            # Distance from closest point to polytope along any violated hyperplane
-            violations = torch.matmul(closest_point, other.A.T) - other.b.unsqueeze(0)  # (batch, num_planes)
-            violations = torch.clamp(violations, min=0.0)
-            min_distance = torch.min(violations, dim=1).values  # smallest distance to hyperplanes
-
-            intersects = intersects_line | (min_distance <= self.radius)
-
-            return intersects
+            raise NotImplementedError(
+                f"Intersection check not implemented for {type(other)}")
         else:
             raise NotImplementedError(
                 f"Containment check not implemented for {type(other)}")
