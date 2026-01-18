@@ -139,7 +139,7 @@ class Polytope(ConvexSet):
 
         ordered = ordered.T if transposed else ordered
 
-        return ordered.cpu().numpy()
+        return ordered
 
     def center(self, idx: int | None = None) -> Float[Tensor, "batch_dim dim"]:
         """Computation of the Chebyshev center of an HPolyhedron HP via linear programming.
