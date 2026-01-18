@@ -57,15 +57,12 @@ class Polytope(ConvexSet):
         else:
             raise TypeError(f"Invalid index type {type(idx)}")
 
-    def vertices(self) -> np.ndarray:
+    def vertices(self):
 
-        A = self.A[0]
-        b = self.b[0]
+        A = self.A[0].cpu()
+        b = self.b[0].cpu()
         n = self.dim
-
-        device = A.device
-
-        c = torch.zeros(n + 1, device=device)
+        c = torch.zeros(n + 1, device="cpu")
         c[-1] = -1
 
         mask = torch.isfinite(b)
@@ -76,19 +73,13 @@ class Polytope(ConvexSet):
 
         A_ub = torch.cat([
             A_i,
-            torch.ones(unpadded_shape, 1, device=device)
+            torch.ones(unpadded_shape, 1, device=A_i.device)
         ], dim=1)
 
-        b_ub = b_i
-
-        c_np    = c.detach().cpu().numpy()
-        A_ub_np = A_ub.detach().cpu().numpy()
-        b_ub_np = b_ub.detach().cpu().numpy()
-
         res = linprog(
-            c_np,
-            A_ub=A_ub_np,
-            b_ub=b_ub_np,
+            c, 
+            A_ub=A_ub, 
+            b_ub=b_i, 
             bounds=[(None, None)] * n + [(0, None)],
             method="highs"
         )
@@ -103,6 +94,7 @@ class Polytope(ConvexSet):
             -b[:, None]
         ], dim=1)
 
+        # QHull does NOT support array API → numpy
         halfspaces_np = halfspaces.detach().cpu().numpy()
 
         try:
