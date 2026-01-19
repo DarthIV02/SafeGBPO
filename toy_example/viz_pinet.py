@@ -3,186 +3,207 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon, FancyArrowPatch
 from matplotlib.lines import Line2D
-from matplotlib.patches import Polygon
+from scipy.spatial import ConvexHull, HalfspaceIntersection
+from scipy.optimize import linprog
 
 # ==========================================
 # 1. Path Setup & Imports
 # ==========================================
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.append(project_root)
+sys.path.append(os.path.join(project_root, "src"))
 
 try:
-    from src.safeguards.pinet import PinetSafeguard
+    from safeguards.pinet import PinetSafeguard
     import sets as sets
 except ImportError as e:
-    print(f"[Error] Failed to import PinetSafeguard: {e}")
+    print(f"[Error] Import failed: {e}")
     sys.exit(1)
 
 from envs.interfaces.safe_action_env import SafeActionEnv
 from envs.simulators.interfaces.simulator import Simulator
 
 # ==========================================
-# 2. Mock Environment with Complex Polytope
+# 2. Helper: Automatic Polytope Visualization
 # ==========================================
-class PolytopeSafeEnv(Simulator, SafeActionEnv):
-    """
-    複雑な形状(Polytope)のSafe Setを持つダミー環境
-    """
+def get_polytope_patch(A, b, color):
+    if isinstance(A, torch.Tensor): A = A.detach().cpu().numpy()
+    if isinstance(b, torch.Tensor): b = b.detach().cpu().numpy()
+    
+    norm_A = np.linalg.norm(A, axis=1)
+    c_obj = np.zeros(A.shape[1] + 1)
+    c_obj[-1] = -1 
+    A_ub = np.hstack([A, norm_A[:, np.newaxis]])
+    b_ub = b
+    res = linprog(c_obj, A_ub=A_ub, b_ub=b_ub, bounds=(None, None), method='highs')
+    
+    interior_point = np.zeros(A.shape[1])
+    if res.success: interior_point = res.x[:-1]
+    
+    halfspaces = np.hstack((A, -b[:, np.newaxis]))
+    try:
+        hs = HalfspaceIntersection(halfspaces, interior_point)
+        hull = ConvexHull(hs.intersections)
+        ordered_vertices = hs.intersections[hull.vertices]
+        return Polygon(ordered_vertices, closed=True, fc=color, alpha=0.1, ec=color, lw=2.5, ls='--', label='Safe Set')
+    except Exception:
+        return None
+
+# ==========================================
+# 3. Environment with Complex Constraints
+# ==========================================
+class ComplexPolytopeEnv(Simulator, SafeActionEnv):
     def __init__(self):
         SafeActionEnv.__init__(self, num_action_gens=2)
         num_envs = 1
         action_dim = 2
-        state_dim = 2
         self.polytope = True
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # --- Safe Set Definition: Ax <= b ---
-        # 5つの不等式で囲まれた領域を作成
         A = [
-            [1.0, 1.0],   # x + y <= 0.2  (右上カット)
-            [-1.0, 0.0],  # -x <= 0.7     (左端 x >= -0.7)
-            [0.0, -1.0],  # -y <= 0.7     (下端 y >= -0.7)
-            [1.0, -1.0],  # x - y <= 0.6  (右下カット)
-            [-1.0, 1.0]   # -x + y <= 0.6 (左上カット)
+            [ 0.8,  1.0], [-1.0,  0.5], [-1.0, -0.2],
+            [-0.2, -1.0], [ 1.0, -0.8], [ 1.0,  0.0]
         ]
-        b = [0.2, 0.7, 0.7, 0.6, 0.6]
+        b = [0.5, 0.6, 0.7, 0.6, 0.5, 0.7]
 
         self.A = torch.tensor(A, dtype=torch.float64, device=self.device)
         self.b = torch.tensor(b, dtype=torch.float64, device=self.device)
 
-        # PiNet初期化に必要なダミー設定
-        center = torch.zeros((num_envs, state_dim), dtype=torch.float64, device=self.device)
-        generator = torch.diag_embed(torch.ones((num_envs, state_dim), dtype=torch.float64, device=self.device))
-        box_set = sets.AxisAlignedBox(center, generator)
+        box = sets.AxisAlignedBox(torch.zeros((num_envs, 2), device=self.device), torch.eye(2, device=self.device).unsqueeze(0))
+        Simulator.__init__(self, action_dim=action_dim, state_set=box, noise_set=box, observation_set=box, num_envs=num_envs)
 
-        Simulator.__init__(self, action_dim=action_dim, state_set=box_set, noise_set=box_set,
-                           observation_set=box_set, num_envs=num_envs)
-
-    def compute_A_b(self):
-        return self.A.unsqueeze(0), self.b.unsqueeze(0)
-
-    def safe_action_set(self):
-        return sets.HPolytope(self.A.unsqueeze(0), self.b.unsqueeze(0))
-
-    # --- Minimal Implementations for Abstract Methods ---
-    def reward(self, action): 
-        return torch.zeros(self.num_envs, device=self.device)
-    
-    def episode_ending(self): 
-        return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device), \
-               torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-    
+    def compute_A_b(self): return self.A.unsqueeze(0), self.b.unsqueeze(0)
+    def safe_action_set(self): return sets.HPolytope(self.A.unsqueeze(0), self.b.unsqueeze(0))
+    def reward(self, action): return torch.zeros(1, device=self.device)
+    def episode_ending(self): return torch.zeros(1, dtype=torch.bool), torch.zeros(1, dtype=torch.bool)
     def unbatched_dynamics(self, s, a, n): return s
-    
-    def linear_dynamics(self):
-        # Dummy linear dynamics
-        batch = self.num_envs
-        z = torch.zeros
-        return z((batch, 2), device=self.device), z((batch, 2, 2), device=self.device), \
-               z((batch, 2, 2), device=self.device), z((batch, 2, 2), device=self.device)
-
-    # ★ これがないとエラーになります
-    def render(self) -> list[torch.Tensor]:
-        return []
+    def render(self): return []
 
 # ==========================================
-# 3. Optimization Setup
+# 4. Optimization Setup
 # ==========================================
 def run_pinet_optimization():
-    env = PolytopeSafeEnv()
+    env = ComplexPolytopeEnv()
     device = env.device
-    print(f"Using device: {device}")
 
     pinet = PinetSafeguard(
         env=env,
         regularisation_coefficient=10.0,
-        n_iter_admm=20,     # 高速化のため減らす
+        n_iter_admm=20, 
         n_iter_bwd=10,
-        sigma=1.0,
-        omega=1.7,
-        bwd_method="unroll",
-        fpi=False
+        bwd_method="unroll"
     )
-    # 念のため
-    pinet.action_dim = 2
-    pinet.batch_dim = 1
 
-    # 初期値 (右上) -> Target (左下)
-    u_param = torch.tensor([[0.8, 0.8]], requires_grad=True, dtype=torch.float64, device=device)
-    target = torch.tensor([[-0.4, -0.4]], dtype=torch.float64, device=device)
+    u_param = torch.tensor([[0.9, 0.9]], requires_grad=True, dtype=torch.float64, device=device)
+    target = torch.tensor([[-0.15, -0.15]], dtype=torch.float64, device=device)
     
-    # Adamの方が収束が早い傾向があります
-    optimizer = torch.optim.Adam([u_param], lr=0.05)
+    optimizer = torch.optim.Adam([u_param], lr=0.01, betas=(0.9, 0.999))
     
     u_hist, s_hist = [], []
+    steps = 500
     
-    print("Starting Optimization...")
-    steps = 50
+    print(f"Starting Optimization ({steps} steps)...")
+    
     for i in range(steps):
-        u_hist.append(u_param.detach().cpu().numpy()[0])
-        
-        # Forward
+        u_hist.append(u_param.detach().cpu().numpy().copy()[0])
         u_safe = pinet.safeguard(u_param)
-        s_hist.append(u_safe.detach().cpu().numpy()[0])
+        s_hist.append(u_safe.detach().cpu().numpy().copy()[0])
         
-        # Loss: Safe距離 + 補助項
-        loss = torch.sum((u_safe - target)**2) + 0.05 * torch.sum((u_param - target)**2)
+        diff = u_safe - target
+        loss_attr = torch.sum(diff**2)
+        curl_loss = 0.1 * torch.abs(diff[:, 0] * 0.6 + diff[:, 1] * (-0.4))
+        loss_raw = 0.005 * torch.sum((u_param - target)**2)
+        
+        loss = loss_attr + curl_loss + loss_raw
         
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        if i % 10 == 0:
-            print(f"Iter {i}: Loss={loss.item():.4f}")
 
-    return np.array(u_hist), np.array(s_hist), target.cpu().numpy()[0]
+    return np.array(u_hist), np.array(s_hist), target.cpu().numpy()[0], env
 
 # ==========================================
-# 4. Visualization
+# 5. Visualization (Poster Style)
 # ==========================================
-def plot_results(unsafe_traj, safe_traj, target):
+def plot_results(u_traj, s_traj, target, env):
+    # --- Color Palette (Magma / Flare Style) ---
+    cmap = plt.get_cmap('magma')
+    c_path_dark = cmap(0.15)  # (Unsafe Trajectory)
+    c_proj_link = cmap(0.55)  # (Projection Link)
+    c_safe_set  = cmap(0.75)  # (Safe Set)
+    c_target    = cmap(0.65)  # (Target)
+    c_safe_pt   = cmap(0.85)  # (Projected Point)
+
     fig, ax = plt.subplots(figsize=(8, 8))
     
-    # Background
-    x_range = np.linspace(-1.2, 1.2, 100)
-    X, Y = np.meshgrid(x_range, x_range)
-    Z = np.sqrt((X - target[0])**2 + (Y - target[1])**2)
-    ax.contourf(X, Y, -Z, levels=50, cmap='GnBu', alpha=0.5)
-    
-    # Safe Set Polygon (頂点を定義して描画)
-    # A, b に基づく頂点座標
-    verts = [(-0.7, -0.7), (-0.1, -0.7), (0.4, -0.2), (-0.2, 0.4), (-0.7, -0.1)]
-    poly = Polygon(verts, closed=True, facecolor='none', edgecolor='black', 
-                   linewidth=2, linestyle='--', label='Safe Set')
-    ax.add_patch(poly)
-    
-    # Trajectory Line
-    ax.plot(unsafe_traj[:, 0], unsafe_traj[:, 1], 'k:', linewidth=1, alpha=0.5)
+    # 1. Background
+    ax.set_facecolor('white')
 
-    # Arrows (間引いて描画)
-    indices = np.linspace(0, len(unsafe_traj)-1, 6, dtype=int)
-    for i in indices:
-        u_pt = unsafe_traj[i]
-        s_pt = safe_traj[i]
+    # 2. Safe Set
+    poly_patch = get_polytope_patch(env.A, env.b, color=c_safe_set)
+    if poly_patch:
+        ax.add_patch(poly_patch)
+
+    # 3. Sampling Strategy (Manual Adjustment for better spacing)
+    indices = [0, 15, 50, 100, 180, 280, 400, 499]
+    print(f"Plotting steps: {indices}")
+
+    # 4. Plotting
+    for k, i in enumerate(indices):
+        if i >= len(u_traj): break
+        u, s = u_traj[i], s_traj[i]
         
-        ax.plot(u_pt[0], u_pt[1], 'kp', markersize=10, markeredgecolor='white', zorder=5) # Unsafe
-        ax.plot(s_pt[0], s_pt[1], 'o', color='royalblue', markersize=6, zorder=4) # Safe
-        ax.annotate("", xy=s_pt, xytext=u_pt,
-                    arrowprops=dict(arrowstyle="->", color="royalblue", lw=1.5, alpha=0.7))
+        # --- A. Unsafe Parameter Evolution  ---
+        if k < len(indices) - 1:
+            next_i = indices[k+1]
+            u_next = u_traj[next_i]
+            arrow = FancyArrowPatch(
+                posA=u, posB=u_next,
+                arrowstyle='-|>,head_length=6,head_width=3',
+                connectionstyle="arc3,rad=0", 
+                color=c_path_dark, lw=2, alpha=0.8, zorder=3
+            )
+            ax.add_patch(arrow)
 
-    ax.scatter(target[0], target[1], marker='x', s=200, color='red', lw=3, label='Target', zorder=10)
-    
-    ax.legend(loc='upper right')
-    ax.set_xlim(-1.0, 1.0)
-    ax.set_ylim(-1.0, 1.0)
+        # --- B. Projection Link ---
+        ax.plot([u[0], s[0]], [u[1], s[1]], linestyle=':', color=c_proj_link, lw=1.5, alpha=0.7, zorder=2)
+
+        # --- C. Markers ---
+        # Unsafe (X marker)
+        ax.plot(u[0], u[1], marker='x', ms=8, color=c_path_dark, mew=2.5, zorder=5)
+        # Safe (Circle marker)
+        ax.plot(s[0], s[1], marker='o', ms=6, color=c_safe_pt, mec=c_path_dark, mew=1, zorder=4)
+
+    # 5. Target (Safe Set)
+    ax.scatter(target[0], target[1], marker='*', s=300, color=c_target, edgecolors='black', lw=1.5, label='Target', zorder=10)
+
+    # 6. Formatting
+    ax.set_xlim(-1.1, 1.1)
+    ax.set_ylim(-1.1, 1.1)
     ax.set_aspect('equal')
-    ax.set_title("PiNet Optimization (Complex Polytope)")
+    
+    ax.set_title("Optimization Trajectory", fontsize=16, fontweight='bold', color='#333333')
+    
+    ax.grid(True, linestyle='-', alpha=0.15, color='gray')
+
+    legend_elements = [
+        Line2D([0], [0], color='white', marker='s', markerfacecolor=c_safe_set, alpha=0.3, markersize=10, markeredgecolor=c_safe_set, linestyle='--', lw=2, label='Safe Set'),
+        Line2D([0], [0], color=c_path_dark, lw=2, marker='x', markersize=8, label='Unsafe Param Evolution'),
+        Line2D([0], [0], color=c_proj_link, lw=1.5, linestyle=':', marker='o', markerfacecolor=c_safe_pt, markersize=6, label='Projection Mapping'),
+        Line2D([0], [0], marker='*', color='w', markerfacecolor=c_target, markeredgecolor='black', markersize=12, label='Target')
+    ]
+    ax.legend(handles=legend_elements, loc='lower left', framealpha=0.9, fontsize=11)
     
     plt.tight_layout()
-    plt.savefig("pinet_polytope_opt.png", dpi=300)
-    print("Saved: pinet_polytope_opt.png")
+    
+    # SVG保存
+    plt.savefig("pinet_optimization_magma.svg", format='svg', bbox_inches='tight')
+    plt.savefig("pinet_optimization_magma.png", dpi=300, bbox_inches='tight') # 確認用PNG
+    print("Saved: pinet_optimization_magma.svg & .png")
 
 if __name__ == "__main__":
-    u_h, s_h, t = run_pinet_optimization()
-    plot_results(u_h, s_h, t)
+    u_h, s_h, t, env_obj = run_pinet_optimization()
+    plot_results(u_h, s_h, t, env_obj)
