@@ -105,7 +105,8 @@ class LearningAlgorithm(ABC):
     @jaxtyped(typechecker=beartype)
     def _learn_episode_additional_metrics(self) -> dict[str, float]:
         """
-        Get metrics for the learning algorithm.
+        Get metrics for the learning algorithm. 
+        If the learning algorithm has no additional metrics, return an empty dictionary.
 
         Returns:
             A dictionary of metrics.

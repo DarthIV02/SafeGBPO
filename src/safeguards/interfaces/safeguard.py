@@ -105,17 +105,18 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
-    def safe_guard_loss(self,
-                        action: Float[Tensor, "steps {self.batch_dim} {self.action_dim}"],
-                        safe_action: Float[Tensor, "steps {self.batch_dim} {self.action_dim}"]
-                        ) -> Tensor:
+    @abstractmethod
+    def regularisation(self,
+                        action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
+                        safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
+                        ) -> Float[Tensor, "{self.batch_dim}"]:
         """
-        Compute the safeguard loss for the given action.
+        Compute the safeguard regularisation loss for the given action.
 
         Args:
             action: The action to compute the loss for.
         Returns:
-            The safeguard loss.
+            The safeguard regularisation loss.
         """
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
@@ -128,6 +129,7 @@ class Safeguard(VectorActionWrapper, ABC):
             A dictionary of metrics.
         """
         return {
+            "interventions":        self.interventions,
             "dist_safe_action":     self.dist_safe_action,
             "pre_eq_violation":     self.pre_eq_violation,
             "pre_ineq_violation":   self.pre_ineq_violation,
@@ -201,13 +203,13 @@ class Safeguard(VectorActionWrapper, ABC):
         safe_action_center = cp.Parameter(self.action_dim)
         safe_action_generator = cp.Parameter((self.action_dim, self.safe_action_gens))
 
-        if generator is None:
+        if generator is None: 
             constraints = sets.Zonotope.point_containment_constraints(
                 center,
                 safe_action_center,
                 safe_action_generator
             )
-        else:
+        else: 
             constraints = sets.Zonotope.zonotope_containment_constraints(
                 center,
                 generator,

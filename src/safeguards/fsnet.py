@@ -74,10 +74,8 @@ class FSNetSafeguard(Safeguard):
         """
 
         # for FSNet create a data object that contains the constraint representation and residual functions
-        # for this implementation we implement it from the convex safe action set in the env
+        # for this implementation we implement it from the safe action set in the env, using convex set constraints
         self.data = self.safe_action_set()
-        if not isinstance(self.data, (Polytope, Zonotope)):
-            raise NotImplementedError("FSNet only supports Polytope and Zonotope safe action sets.")
 
         self.data.setup_constraints()
 
@@ -85,8 +83,8 @@ class FSNetSafeguard(Safeguard):
         processed_action = self.data.pre_process_action(action)
 
         # compute pre safeguard violations for logging and loss
-        self.pre_eq_violation = self.data.eq_resid(None, processed_action).square().sum(dim=1)
-        self.pre_ineq_violation = self.data.ineq_resid(None, processed_action).square().sum(dim=1)
+        self.pre_eq_violation = self.data.equality_constraint_violation(None, processed_action).square().sum(dim=1)
+        self.pre_ineq_violation = self.data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
         
         # Use non-differentiable solver during evaluation (no grad mode),
         # hybrid solver during training (with grad) for better backpropagation
@@ -108,29 +106,26 @@ class FSNetSafeguard(Safeguard):
                 )
     
         # compute post safeguard violations for logging
-        self.post_eq_violation = self.data.eq_resid(None, safe_action).square().sum(dim=1)
-        self.post_ineq_violation = self.data.ineq_resid(None, safe_action).square().sum(dim=1)
+        self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
+        self.post_ineq_violation = self.data.inequality_constraint_violation(None, safe_action).square().sum(dim=1)
 
         # return the safe action to original space
         safe_action = self.data.post_process_action(safe_action)
         return safe_action
 
-    def safe_guard_loss(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
+    def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
                         safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
         """
-        Compute the safeguard loss for FSNet.
+        Compute the safeguard regularisation loss for FSNet.
         Args:
             action: The original action before safeguarding.
             safe_action: The safeguarded action.
         Returns:
-            The safeguard loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
+            The safeguard regularisation loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
 
-        # compute the safeguard loss
         loss = self.regularisation_coefficient/2 * torch.nn.functional.mse_loss(safe_action, action) 
         
-        # add penalty for residual violations as defined in FSNet paper practical implementation
-        # for good backpropagation, only add penalty if the mean violation is significant
         if self.pre_eq_violation.mean() > 1e-3:
             loss = loss + self.regularisation_coefficient * self.pre_eq_violation.mean()
         if self.pre_ineq_violation.mean() > 1e-3:
@@ -143,10 +138,10 @@ class FSNetSafeguard(Safeguard):
         """
 
         return  super().safeguard_metrics() | {
-            "pre_eq_violation":     self.pre_eq_violation.mean().item() if type(self.pre_eq_violation) == torch.Tensor else self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation.mean().item() if type(self.pre_ineq_violation) == torch.Tensor else self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation.mean().item() if type(self.post_eq_violation) == torch.Tensor else self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation.mean().item() if type(self.post_ineq_violation) == torch.Tensor else self.post_ineq_violation,
+            "pre_eq_violation":     self.pre_eq_violation,
+            "pre_ineq_violation":   self.pre_ineq_violation,
+            "post_eq_violation":    self.post_eq_violation,
+            "post_ineq_violation":  self.post_ineq_violation,
         }
     
 #################################################
@@ -171,7 +166,7 @@ def lbfgs_torch_solve(
     Args:
         x: Input tensor (batch_size, input_dim)
         y_init: Initial action (batch_size, action_dim)
-        data: Data object with eq_resid and ineq_resid methods
+        data: Data object with equality_constraint_violation and inequality_constraint_violation methods
         config: Solver configuration
     """
     if config is None:
@@ -185,10 +180,10 @@ def lbfgs_torch_solve(
         a_diff = _lbfgs_step(
             y_init,
             obj_fn,
-            config.max_norm,
+            config.gradient_clipping_max_norm,
             config.max_iter,
-            config.lr,
-            config.memory
+            config.lbfgs_torch_learning_rate,
+            config.lbfgs_history_size
         )
         return a_diff
     
@@ -209,10 +204,10 @@ def lbfgs_torch_solve(
         a_nondiff = _lbfgs_step(
             a_diff.detach(),
             obj_fn,
-            config.max_norm,
+            config.gradient_clipping_max_norm,
             config.max_iter - config.max_diff_iter,
-            config.lr,
-            config.memory
+            config.lbfgs_torch_learning_rate,
+            config.lbfgs_history_size
         )
         # Connect gradients through differentiable phase
         return a_diff + (a_nondiff - a_diff).detach()
@@ -233,21 +228,21 @@ def nondiff_lbfgs_torch_solve(
     Args:
         x: Input tensor (batch_size, input_dim)
         y_init: Initial action (batch_size, action_dim)
-        data: Data object with eq_resid and ineq_resid methods
+        data: Data object with equality_constraint_violation and inequality_constraint_violation methods
         config: Solver configuration
     """
     if config is None:
         config = SimpleNamespace(**kwargs)
 
-    obj_fn = _create_objective_function(x, data, config.scale)
+    obj_fn = _create_objective_function(x, data, config.objective_scale)
     
     a = _lbfgs_step(
         y_init,
         obj_fn,
-        config.max_norm,
+        config.gradient_clipping_max_norm,
         config.max_iter,
-        config.lr,
-        config.memory
+        config.lbfgs_torch_learning_rate,
+        config.lbfgs_history_size
     )
     
     return a.detach()
@@ -255,10 +250,10 @@ def nondiff_lbfgs_torch_solve(
 def _lbfgs_step(
     y_init: torch.Tensor,
     obj_fn: Callable,
-    max_norm: float,
+    gradient_clipping_max_norm: float,
     max_iter: int,
-    lr: float,
-    memory: int
+    lbfgs_torch_learning_rate: float,
+    lbfgs_history_size: int
     ) -> torch.Tensor:
     """
     LBFGS step that preserves gradient connection to y_init.
@@ -269,18 +264,18 @@ def _lbfgs_step(
     Args:
         y_init: Initial point (can be non-leaf, gradient connection preserved!)
         obj_fn: Objective function
-        max_norm: Gradient clipping norm
+        gradient_clipping_max_norm: Gradient clipping norm
         max_iter: Max iterations
-        lr: Learning rate
-        memory: LBFGS history size
+        lbfgs_torch_learning_rate: Learning rate
+        lbfgs_history_size: LBFGS history size
         create_graph: Whether to create backward graph
     """
     # Optimizing delta for y_init + delta
     # y_init stays in the graph, delta is the leaf tensor for optimizer
     delta = torch.zeros_like(y_init, requires_grad=True)
     
-    optimizer = torch.optim.LBFGS([delta], lr=lr, max_iter=max_iter, 
-                      history_size=memory, line_search_fn='strong_wolfe')
+    optimizer = torch.optim.LBFGS([delta], lr=lbfgs_torch_learning_rate, max_iter=max_iter, 
+                      history_size=lbfgs_history_size, line_search_fn='strong_wolfe')
     
     def closure():
         optimizer.zero_grad()
@@ -292,8 +287,8 @@ def _lbfgs_step(
         
         # Clip gradient and assign to delta.grad
         grad_norm = grad.norm()
-        if grad_norm > max_norm:
-            grad = grad * (max_norm / grad_norm)
+        if grad_norm > gradient_clipping_max_norm:
+            grad = grad * (gradient_clipping_max_norm / grad_norm)
         
         delta.grad = grad
         
@@ -383,45 +378,21 @@ def compute_gamma(S: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return s_dot_y / y_dot_y
 
 
-class LBFGSConfig:
-    """Configuration class for L-BFGS parameters."""
-    def __init__(
-        self,
-        max_iter: int = 20,
-        memory: int = 20,
-        val_tol: float = 1e-6,
-        grad_tol: float = 1e-6,
-        scale: float = 1.0,
-        c: float = 1e-4,
-        rho_ls: float = 0.5,
-        max_ls_iter: int = 10,
-        verbose: bool = False,
-        **kwargs
-    ):
-        self.max_iter = max_iter
-        self.memory = memory
-        self.val_tol = val_tol
-        self.grad_tol = grad_tol
-        self.scale = scale
-        self.c = c
-        self.rho_ls = rho_ls
-        self.max_ls_iter = max_ls_iter
-        self.verbose = verbose
 
 
-def _create_objective_function(x: torch.Tensor, data, scale: float) -> Callable[[torch.Tensor], torch.Tensor]:
+def _create_objective_function(x: torch.Tensor, data, objective_scale: float) -> Callable[[torch.Tensor], torch.Tensor]:
     """Create objective function closure."""
     def _obj(y: torch.Tensor) -> torch.Tensor:
-        eq_residual = (data.eq_resid(x, y) ** 2).sum(dim=1).mean(0)
-        ineq_residual = (data.ineq_resid(x, y) ** 2).sum(dim=1).mean(0)
-        return scale * (eq_residual + ineq_residual)
+        equality_constraint_violationual = (data.equality_constraint_violation(x, y) ** 2).sum(dim=1).mean(0)
+        inequality_constraint_violationual = (data.inequality_constraint_violation(x, y) ** 2).sum(dim=1).mean(0)
+        return objective_scale * (equality_constraint_violationual + inequality_constraint_violationual)
     return _obj
 
 
-def _check_convergence(f_val: torch.Tensor, g: torch.Tensor, config: LBFGSConfig) -> torch.Tensor:
+def _check_convergence(f_val: torch.Tensor, g: torch.Tensor, config) -> torch.Tensor:
     """Check convergence criteria."""
-    val_converged = f_val / config.scale < config.val_tol
-    grad_converged = g.norm(dim=1) < config.grad_tol
+    val_converged = f_val / config.objective_scale < config.convergence_value_tolerance
+    grad_converged = g.norm(dim=1) < config.convergence_gradient_tolerance
     return val_converged | grad_converged
 
 
@@ -431,19 +402,19 @@ def _backtracking_line_search(
     g: torch.Tensor,
     f_val: torch.Tensor,
     obj_func: Callable,
-    config: LBFGSConfig
+    config,
 ) -> float:
     """Perform backtracking line search."""
     step = 1.0
     dir_deriv = (g * d).sum()
     
     with torch.no_grad():
-        for _ in range(config.max_ls_iter):
+        for _ in range(config.line_search_max_iter):
             y_trial = y + step * d
             f_trial = obj_func(y_trial)
-            if (f_trial <= f_val + config.c * step * dir_deriv).all():
+            if (f_trial <= f_val + config.line_search_armijo_c * step * dir_deriv).all():
                 break
-            step *= config.rho_ls
+            step *= config.line_search_rho
     
     return step
 
@@ -452,7 +423,7 @@ def lbfgs_solve(
     x: torch.Tensor,
     y_init: torch.Tensor,
     data,
-    config: Optional[LBFGSConfig] = None,
+    config = None,
     **kwargs
 ) -> torch.Tensor:
     """
@@ -465,7 +436,7 @@ def lbfgs_solve(
     x : torch.Tensor
         Input data
     data : object
-        Data object with eq_resid and ineq_resid methods
+        Data object with equality_constraint_violation and inequality_constraint_violation methods
     config : LBFGSConfig, optional
         Configuration object. If None, uses default parameters from kwargs.
     **kwargs
@@ -477,7 +448,7 @@ def lbfgs_solve(
         Solution, shape (B, n)
     """
     if config is None:
-        config = LBFGSConfig(**kwargs)
+        config = SimpleNamespace(**kwargs)
     
     # Initialize
     y = y_init.clone()
@@ -485,13 +456,13 @@ def lbfgs_solve(
     device, dtype = y_init.device, y_init.dtype
     
     # History buffers
-    S_hist = torch.zeros(config.memory, B, n, device=device, dtype=dtype)
+    S_hist = torch.zeros(config.lbfgs_history_size, B, n, device=device, dtype=dtype)
     Y_hist = torch.zeros_like(S_hist)
     hist_len = 0
     hist_ptr = 0
     
     # Create objective function
-    obj_func = _create_objective_function(x, data, config.scale)
+    obj_func = _create_objective_function(x, data, config.objective_scale)
     
     # Initial evaluation
     f_val = obj_func(y)
@@ -506,7 +477,7 @@ def lbfgs_solve(
         
         # Compute search direction
         if hist_len > 0:
-            idx = (hist_ptr - hist_len + torch.arange(hist_len, device=device)) % config.memory
+            idx = (hist_ptr - hist_len + torch.arange(hist_len, device=device)) % config.lbfgs_history_size
             S = S_hist[idx]
             Y = Y_hist[idx]
             gamma = compute_gamma(S, Y)
@@ -525,8 +496,8 @@ def lbfgs_solve(
         # Update history
         S_hist[hist_ptr] = y_next - y
         Y_hist[hist_ptr] = g_next - g
-        hist_ptr = (hist_ptr + 1) % config.memory
-        hist_len = min(hist_len + 1, config.memory)
+        hist_ptr = (hist_ptr + 1) % config.lbfgs_history_size
+        hist_len = min(hist_len + 1, config.lbfgs_history_size)
         
         # Prepare for next iteration
         y = y_next
@@ -534,7 +505,7 @@ def lbfgs_solve(
         g = g_next.clone()
         
         if config.verbose and k % 5 == 0:
-            print(f"Iter {k:3d}: f = {f_next.item()/config.scale:.3e}, "
+            print(f"Iter {k:3d}: f = {f_next.item()/config.objective_scale:.3e}, "
                   f"|g| = {g_next.norm():.3e}, step = {step:.3e}")
     
     return y
