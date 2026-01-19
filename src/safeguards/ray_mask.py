@@ -44,7 +44,7 @@ class RayMaskSafeguard(Safeguard):
             zonotopic_approximation: Whether to use zonotopic approximation.
             passthrough: Whether to use passthrough gradients
         """
-        super().__init__(env)
+        super().__init__(env, regularisation_coefficient)
         self.linear_projection = linear_projection
         if passthrough:
             self.prev_action = self.actions
@@ -59,7 +59,6 @@ class RayMaskSafeguard(Safeguard):
         self.zonotope_distance_layer = None
         self.boundary_projection_safeguard = None
         self.implicit_zonotope_distance_layer = None
-        self.regularisation_coefficient = regularisation_coefficient
     
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \

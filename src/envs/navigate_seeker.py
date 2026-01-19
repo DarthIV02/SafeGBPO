@@ -385,25 +385,13 @@ class NavigateSeekerEnv(SeekerEnv, SafeActionEnv):
                 overlay_draw = ImageDraw.Draw(overlay)
                 
                 if self.safe_action_polytope:
-                    A_i = self.last_safe_action_set.A[i]
-                    b_i = self.last_safe_action_set.b[i]
-                    s_i = self.state[i]
-
-                    b_shifted = (b_i + torch.matmul(A_i, s_i))
-                    draw_set = sets.Polytope(A = A_i.unsqueeze(0),
-                                            b = b_shifted.unsqueeze(0))
-                    draw_set._centers[0] = None
-                    vertices = draw_set.vertices()
-
-                    if vertices.shape[0] == 0:
-                        frames.append(torch.zeros(3, self.SCREEN_HEIGHT, self.SCREEN_WIDTH, dtype=torch.uint8))
-                        continue
-
+                    draw_set = sets.Polytope(A = self.last_safe_action_set.A[i].unsqueeze(0),
+                                            b = (self.last_safe_action_set.b[i] + torch.matmul(self.last_safe_action_set.A[i], self.state[i])).unsqueeze(0))
                 else:
                     draw_set = sets.Zonotope(self.last_safe_action_set.center[i:i + 1, :] + self.state[i:i + 1, :],
                                             self.last_safe_action_set.generator[i:i + 1, :, :])
                 
-                    vertices = draw_set.vertices().cpu().detach().numpy()
+                vertices = draw_set.vertices().cpu().detach().numpy()
 
                 screen_vertices = [
                     (v[0] * scale + offset_x, -v[1] * scale + offset_y)

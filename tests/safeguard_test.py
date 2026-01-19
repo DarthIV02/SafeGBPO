@@ -25,9 +25,9 @@ def test_ray_mask():
     torch.set_default_dtype(torch.float64)
     env = BalancePendulumEnv(num_envs=2, num_steps=100)
     env.reset()
-    for shape_approximation in [(True, False), (False, False)]:
-        wrapper = RayMaskSafeguard(env=env, regularisation_coefficient=0.1, linear_projection=True, zonotopic_approximation=shape_approximation[0],
-                                   polytopic_approximation=shape_approximation[1], passthrough=False)
+    for zonotopic_approximation in [True, False]:
+        wrapper = RayMaskSafeguard(env, linear_projection=True, zonotopic_approximation=zonotopic_approximation,
+                                   passthrough=False)
 
         action = torch.tensor([[0.0], [1.0]], requires_grad=True)
         safe_actions = wrapper.actions(action)

@@ -26,9 +26,8 @@ class PinetSafeguard(Safeguard):
         fpi: bool = False,
         **kwargs
     ):
-        super().__init__(env)
+        super().__init__(env, regularisation_coefficient)
 
-        self.regularisation_coefficient = regularisation_coefficient
         self.n_iter_admm = n_iter_admm
         self.n_iter_bwd = n_iter_bwd
 

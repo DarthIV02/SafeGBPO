@@ -48,15 +48,17 @@ class FSNetSafeguard(Safeguard):
                  env: SafeEnv, 
                  regularisation_coefficient: float,
                  **kwargs):
-        Safeguard.__init__(self, env)
-
-        self.regularisation_coefficient = regularisation_coefficient
+        Safeguard.__init__(self, env, regularisation_coefficient)
 
         # assume the remaining kwargs are solver config parameters
         self.method_config = kwargs
 
         self.solver =    lbfgs_torch_solve
         self.nondiff_solver =   nondiff_lbfgs_torch_solve
+
+        if not self.env.safe_action_polytope:
+            # Current implementation only supports polytope safe action set
+            raise Exception("Polytope attribute has to be True")
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
