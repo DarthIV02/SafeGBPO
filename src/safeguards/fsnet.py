@@ -47,10 +47,12 @@ class FSNetSafeguard(Safeguard):
     def __init__(self, 
                  env: SafeEnv, 
                  regularisation_coefficient: float,
+                 penalty_addition_threshold: float,
                  **kwargs):
         Safeguard.__init__(self, env)
 
         self.regularisation_coefficient = regularisation_coefficient
+        self.penalty_addition_threshold = penalty_addition_threshold
 
         # assume the remaining kwargs are solver config parameters
         self.method_config = kwargs
@@ -102,45 +104,62 @@ class FSNetSafeguard(Safeguard):
                     self.data,
                     **self.method_config
                 )
-    
-        # compute post safeguard violations for logging
-        self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
-        self.post_ineq_violation = self.data.inequality_constraint_violation(None, safe_action).square().sum(dim=1)
+            print("FSNet Safeguard used nondiff solver in eval mode.")  
+            # compute post safeguard violations for logging
+            self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
+            self.post_ineq_violation = self.data.inequality_constraint_violation(None, safe_action).square().sum(dim=1)
 
         # return the safe action to original space
         safe_action = self.data.post_process_action(safe_action)
         return safe_action
 
-    def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+    def regularisation(self,
+                        action: Float[Tensor, "... {self.action_dim}"],
+                        safe_action: Float[Tensor, "... {self.action_dim}"],
+                        safeguard_metrics: Optional[Dict[str, Tensor]] = None,
+                        **kwargs
+                        ) -> Float[Tensor, "..."]:
         """
         Compute the safeguard regularisation loss for FSNet.
         Args:
-            action: The original action before safeguarding.
+            action:  The action to compute the loss for.
             safe_action: The safeguarded action.
+            safeguard_metrics: Optional metrics from the safeguard step. Used in FSNet for residual penalties.
         Returns:
             The safeguard regularisation loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
 
-        loss = self.regularisation_coefficient/2 * torch.nn.functional.mse_loss(safe_action, action) 
-        
-        if self.pre_eq_violation.mean() > 1e-3:
-            loss = loss + self.regularisation_coefficient * self.pre_eq_violation.mean()
-        if self.pre_ineq_violation.mean() > 1e-3:
-            loss = loss + self.regularisation_coefficient * self.pre_ineq_violation.mean()
-        return loss
+        loss = self.regularisation_coefficient/2 *  (torch.norm(action - safe_action, dim=1) ** 2)
+
+        if safeguard_metrics is not None:
+
+            pre_eq_violation = safeguard_metrics["pre_eq_violation"].tensor
+            pre_ineq_violation = safeguard_metrics["pre_ineq_violation"].tensor
+
+            loss +=  self.regularisation_coefficient * torch.where(pre_eq_violation > self.penalty_addition_threshold,
+                                                                pre_eq_violation, 
+                                                                torch.zeros_like(pre_eq_violation))
+            loss +=  self.regularisation_coefficient * torch.where(pre_ineq_violation > self.penalty_addition_threshold,
+                                                                pre_ineq_violation,
+                                                                torch.zeros_like(pre_ineq_violation))
+        return loss.mean()
     
     def safeguard_metrics(self):
         """
             Metrics to monitor the safeguard performance residual violations 
         """
-
-        return  super().safeguard_metrics() | {
+        safe_guard_metrics_training = {
             "pre_eq_violation":     self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation,
-        }
+            "pre_ineq_violation":   self.pre_ineq_violation}
+        
+        safe_guard_metrics_evaluation = safe_guard_metrics_training.copy() 
+        
+        if not torch.is_grad_enabled(): # evaluation mode
+            safe_guard_metrics_evaluation |= {
+                "post_eq_violation":    self.post_eq_violation,
+                "post_ineq_violation":  self.post_ineq_violation}
+        return super().safeguard_metrics(safeguard_metrics_dict=safe_guard_metrics_evaluation,
+                                        safeguard_metrics_dict_training_only=safe_guard_metrics_training)
     
 #################################################
 # LBFGS solver functions 

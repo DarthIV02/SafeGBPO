@@ -56,13 +56,7 @@ class Safeguard(VectorActionWrapper, ABC):
         self.safe_action = None
         self.interventions = 0
 
-        self.pre_eq_violation = torch.Tensor([0])
-        self.pre_ineq_violation = torch.Tensor([0])
-        self.post_eq_violation = torch.Tensor([0])
-        self.post_ineq_violation = torch.Tensor([0])
-        self.pre_constraint_violation = torch.Tensor([0])
-        self.post_constraint_violation = torch.Tensor([0])
-        self.dist_safe_action = torch.Tensor([0])
+
 
     @jaxtyped(typechecker=beartype)
     def actions(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -82,7 +76,7 @@ class Safeguard(VectorActionWrapper, ABC):
             Actions: {action[bad_mask]}
             Safe actions: {safe_action[bad_mask]}
             """)
-
+        self.initial_action = action
         self.safe_action = safe_action
         
         self.interventions += ((~torch.isclose(safe_action, action)).count_nonzero(dim=1) == self.action_dim).sum().item()
@@ -104,39 +98,53 @@ class Safeguard(VectorActionWrapper, ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
-    @abstractmethod
     def regularisation(self,
-                        action: Float[Tensor, "{self.batch_dim} {self.action_dim}"],
-                        safe_action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]
-                        ) -> Float[Tensor, "{self.batch_dim}"]:
+                        action: Float[Tensor, "... {self.action_dim}"],
+                        safe_action: Float[Tensor, "... {self.action_dim}"],
+                        **kwargs
+                        ) -> Float[Tensor, "..."]:
         """
         Compute the safeguard regularisation loss for the given action.
 
         Args:
             action: The action to compute the loss for.
+            safe_action: The safe action to compute the loss for.
         Returns:
             The safeguard regularisation loss.
         """
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
 
     @jaxtyped(typechecker=beartype)
-    def safeguard_metrics(self) -> dict[str, Any]:
+    def safeguard_metrics(self, 
+                          safeguard_metrics_dict: dict[str, Any] = {}, 
+                          safeguard_metrics_dict_training_only: dict[str, Any] = {})-> dict[str, Any]:
         """
         Get metrics related to the safeguard.
 
         Returns:
             A dictionary of metrics.
         """
-        return {
-            "interventions":        self.interventions,
-            "dist_safe_action":     self.dist_safe_action,
-            "pre_eq_violation":     self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation,
-            "pre_contraint_violation": self.pre_constraint_violation,
-            "post_contraint_violation": self.post_constraint_violation
-        }
+        
+        if torch.is_grad_enabled(): # in training mode we do not store metrics
+            return safeguard_metrics_dict_training_only
+
+        def compute_generic_constraint_violation(phase, action,metrics_dict: dict[str, Any] = {}):
+            data = self.safe_action_set()
+            data.setup_constraints()
+            processed_action = data.pre_process_action(action)
+            metrics_dict[f"{phase}_eq_violation"] = data.equality_constraint_violation(None, processed_action).square().sum(dim=1)
+            metrics_dict[f"{phase}_ineq_violation"] = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
+            return metrics_dict
+        
+        if not "pre_eq_violation" in safeguard_metrics_dict:
+            safeguard_metrics_dict = compute_generic_constraint_violation("pre", self.initial_action, safeguard_metrics_dict)
+        if not "post_eq_violation" in safeguard_metrics_dict:
+            safeguard_metrics_dict = compute_generic_constraint_violation("post", self.safe_action, safeguard_metrics_dict)
+        
+        safeguard_metrics_dict["interventions"] = torch.tensor(self.interventions, dtype=torch.float32)
+        safeguard_metrics_dict["projection_distance"] = torch.nn.functional.mse_loss(self.safe_action, self.initial_action, reduction='none').mean(dim=1)
+        print( "safeguard_metrics_dict after", safeguard_metrics_dict)
+        return safeguard_metrics_dict
 
     @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \

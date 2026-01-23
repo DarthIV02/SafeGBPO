@@ -145,7 +145,9 @@ class SHAC(LearningAlgorithm):
         policy_loss = -(discount * values).sum() / normalisation
         
         if self.buffer.store_safe_actions:
-            policy_loss += self.env.regularisation(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss += self.env.regularisation(self.buffer.actions.tensor, 
+                                                   self.buffer.safe_actions.tensor,
+                                                   safeguard_metrics = self.buffer.safeguard_metrics)
 
         policy_loss.backward()
         

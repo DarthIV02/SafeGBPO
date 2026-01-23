@@ -24,6 +24,7 @@ class RayMaskConfig(SafeguardConfig):
 @dataclass
 class FSNetConfig(SafeguardConfig): 
     regularisation_coefficient: float = 0.1
+    penalty_addition_threshold: float = 1e-3
 
     # FSNet general solver config parameters
     lbfgs_history_size: int = 8
