@@ -14,6 +14,22 @@ import src.sets as sets
 
 class PinetSafeguard(Safeguard):
 
+    """
+    Differentiable safeguard based on ADMM projection onto polyhedral safe sets.
+
+    This class projects actions onto the safe set:
+
+        argmin_x ||x - a||^2  subject to  A x <= b
+
+    using a lifted ADMM / Douglas–Rachford splitting scheme, and supports
+    backpropagation via implicit differentiation of the converged fixed point.
+
+    The backward pass does NOT backpropagate through the unrolled ADMM iterations,
+    but instead differentiates the fixed-point equation.
+
+    See `_ProjectImplicitFn` for details of the implicit backward implementation.
+    """
+
     @jaxtyped(typechecker=beartype)
     def __init__(
         self,
@@ -77,6 +93,12 @@ class PinetSafeguard(Safeguard):
         return y_safe
     
     def _run_admm(self, sk, y_raw, steps):
+
+        """
+        Implement Douglas-Rachford algorithm to project into
+        the intersection of the hyperplane and box constraints.
+        """
+
         D = self.action_dim
         sk_iter = sk.clone()
 
@@ -143,12 +165,16 @@ class _ProjectImplicitFn(torch.autograd.Function):
 
     """
     Custom autograd Function implementing implicit differentiation
-    through the ADMM fixed point.
+    through ADMM iterations.
     """
 
     @staticmethod
     def forward(ctx, yraw,
                 step_iteration, step_final, og_dim, dim_lifted, n_iter, n_iter_bwd, fpi):
+        
+        """
+        Forward pass of through n_iter ADMM iterations + Final projection into the hyperplane set.
+        """
         
         sK = torch.zeros_like(yraw)
         with torch.no_grad():
@@ -168,8 +194,29 @@ class _ProjectImplicitFn(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_y):
         """
-        Implicit backward solve for ADMM with implicit differentiation.
+        Compute gradient with respect to the ADMM input using implicit differentiation.
+
+        This method backpropagates through a converged ADMM fixed point without
+        explicitly forming or inverting the Jacobian of the ADMM iteration. Instead,
+        it solves a linear system involving the Jacobian-vector product of the ADMM
+        operator using fixed-point iteration or Anderson-style updates.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.FunctionContext
+            Autograd context containing saved tensors, ADMM operators, and solver
+            configuration.
+        grad_y : torch.Tensor
+            Upstream gradient of shape (batch, out_dim).
+
+        Returns
+        -------
+        grad_yraw : torch.Tensor
+            Gradient with respect to the ADMM input `yraw`.
+        None
+            No gradients are returned for the other forward inputs.
         """
+
         sK, yraw = ctx.saved_tensors
         step_iteration = ctx.step_iteration
         step_final = ctx.step_final
@@ -180,6 +227,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
         batch, out_dim = grad_y.shape
         grad_y = grad_y.unsqueeze(2).clone().detach()
 
+        # Project grad_y into lifted space
         y_for_vjp = torch.cat([
             grad_y,
             torch.zeros(batch, dim_lifted - out_dim, 1, device=grad_y.device)
@@ -188,6 +236,7 @@ class _ProjectImplicitFn(torch.autograd.Function):
         sK_bwd = sK.requires_grad_(True)
         yraw_bwd = yraw.requires_grad_(True)
 
+        # d a_safe / d sK
         with torch.enable_grad():
             y_final = step_final(sK_bwd)
 
@@ -198,7 +247,8 @@ class _ProjectImplicitFn(torch.autograd.Function):
             retain_graph=False,
             allow_unused=False
         )[0]
-      
+
+        # Solve system for g in (I - (dADMM/ds_k)^T) g = d L/d a_safe · d a_safe / d s_k
         def iteration_vjp(v):
             with torch.enable_grad():
                 admm_plus = step_iteration(sK_bwd, yraw_bwd, 1)
@@ -218,7 +268,8 @@ class _ProjectImplicitFn(torch.autograd.Function):
             g = vjp.clone()
             for _ in range(n_iter_bwd):
                 g = g + 0.2 * (vjp - (g - iteration_vjp(g)))
-
+        
+        # d L / d a = g^T · d ADMM / d a
         def final_fn(y_in):
             with torch.enable_grad():
                 s = step_iteration(sK_bwd.detach(), y_in, 1)
