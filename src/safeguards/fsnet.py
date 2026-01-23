@@ -56,9 +56,10 @@ class FSNetSafeguard(Safeguard):
         self.solver =    lbfgs_torch_solve
         self.nondiff_solver =   nondiff_lbfgs_torch_solve
 
-        if not self.env.safe_action_polytope:
-            # Current implementation only supports polytope safe action set
+        if not self.env.polytope:
             raise Exception("Polytope attribute has to be True")
+        if not hasattr(self.env, "safe_action_set"):
+            raise Exception("Environment must implement safe_action_set method")
 
     @jaxtyped(typechecker=beartype)
     def safeguard(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
