@@ -57,51 +57,82 @@ class Polytope(ConvexSet):
         else:
             raise TypeError(f"Invalid index type {type(idx)}")
 
-    def vertices(self) -> np.array:
-        A = np.asarray(self.A[0].cpu())
-        b = np.asarray(self.b[0].cpu())
+    def vertices(self):
+
+        A = self.A[0].cpu()
+        b = self.b[0].cpu()
         n = self.dim
+        c = torch.zeros(n + 1, device="cpu")
+        c[-1] = -1
 
-        # Variables: x (n dims) and t (slack)
-        c = np.zeros(n + 1)
-        c[-1] = -1  # maximize t -> minimize -t
+        mask = torch.isfinite(b)
+        A_i = A[mask]
+        b_i = b[mask]
 
-        b_ub = b[np.isfinite(b)]
-        unpadded_shape = b_ub.shape[0]
+        unpadded_shape = b_i.shape[0]
 
-        A_ub = np.hstack([A[:unpadded_shape], np.ones((unpadded_shape, 1))])     
+        A_ub = torch.cat([
+            A_i,
+            torch.ones(unpadded_shape, 1, device=A_i.device)
+        ], dim=1)
 
-        res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(None, None)] * n + [(0, None)])
+        # Works on torch tensors but on cpu only
+        res = linprog(
+            c, 
+            A_ub=A_ub, 
+            b_ub=b_i, 
+            bounds=[(None, None)] * n + [(0, None)],
+            method="highs"
+        )
+
         if not res.success or res.x[-1] <= 1e-9:
-            return np.empty((0, n))  # or return boundary-only
+            return np.empty((0, n))
 
         interior_point = res.x[:-1]
-        halfspaces = np.hstack([A, -b.reshape(-1, 1)])
+
+        halfspaces = torch.cat([
+            A,
+            -b[:, None]
+        ], dim=1)
+
+        # QHull does NOT support array API → numpy
+        halfspaces_np = halfspaces.detach().cpu().numpy()
 
         try:
-            hs = HalfspaceIntersection(halfspaces, interior_point)
+            hs = HalfspaceIntersection(halfspaces_np, interior_point)
             V = hs.intersections
             V = np.reshape(V, (len(V), n))
         except Exception:
-            # In rare cases QHull fails for degenerate polytope
             V = np.empty((0, n))
 
         return self.order_vertices_ccw(V).T
+
     
     def order_vertices_ccw(self, points):
-        """Order them clockwise -> prevent bowtie shape"""
+        if len(points) == 0:
+            return points
+
+        if isinstance(points, np.ndarray):
+            points = torch.from_numpy(points)
+
         transposed = False
         if points.shape[0] == 2:
             points = points.T
             transposed = True
 
-        center = points.mean(axis=0)
-        angles = np.arctan2(points[:, 1] - center[1],
-                            points[:, 0] - center[0])
-        order = np.argsort(angles)
+        center = points.mean(dim=0)
+
+        angles = torch.atan2(
+            points[:, 1] - center[1],
+            points[:, 0] - center[0]
+        )
+
+        order = torch.argsort(angles)
         ordered = points[order]
 
-        return ordered.T if transposed else ordered
+        ordered = ordered.T if transposed else ordered
+
+        return ordered
 
     def center(self, idx: int | None = None) -> Float[Tensor, "batch_dim dim"]:
         """Computation of the Chebyshev center of an HPolyhedron HP via linear programming.
@@ -116,62 +147,61 @@ class Polytope(ConvexSet):
         """
 
         B, num_constraints, dim = self.A.shape
-        
-        if idx is not None:
-            if self._centers[idx] is not None:
-                return self._centers[idx]
 
-            # objective function
-            c = np.hstack((-1, np.zeros(dim)))
-
-            mask = torch.isfinite(self.b[idx])
-            A_i = self.A[idx, mask]
-            b_i = self.b[idx, mask] 
-
-            if mask.sum() == 0:
-                raise ValueError("No finite constraints — Chebyshev center undefined")
-            b_i = torch.clamp(b_i, min=-1e8)
-
-            b_ub = np.hstack((0, b_i.cpu().detach()))
-
-            norms = torch.linalg.norm(A_i, dim=1)
-            norms_np = norms.detach().cpu().numpy()
-            if torch.any((norms == 0) & (b_i < 0)):
-                raise ValueError("Zero row in A with negative b")
-
-            A_ub = np.vstack(
-                (
-                    np.hstack((-1, np.zeros(dim))),
-                    np.hstack(
-                        (
-                            np.reshape(
-                                norms_np, (sum(mask), 1)
-                            ),
-                            A_i.cpu().detach(),
-                        )
-                    ),
-                )
-            )
-            
-            res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=[(0, None)] + [(None, None)] * dim)
-
-            if res.status == 2:  # infeasible -> empty
-                self._centers[idx] = torch.zeros(dim, device=self.device)
-            elif res.status == 3:  # unbounded
-                self._centers[idx] = torch.zeros(dim, device=self.device)
-            else:
-                self._centers[idx] = torch.Tensor(res.x[1:]).to(self.device)
-            
+        if self._centers[idx] is not None:
             return self._centers[idx]
+
+        # Select valid constraints
+        mask = torch.isfinite(self.b[idx])
+        A_i = self.A[idx, mask]
+        b_i = self.b[idx, mask]
+
+        if mask.sum() == 0:
+            raise ValueError("No finite constraints — Chebyshev center undefined")
+
+        b_i = torch.clamp(b_i, min=-1e8)
+
+        norms = torch.linalg.norm(A_i, dim=1)
+
+        if torch.any((norms == 0) & (b_i < 0)):
+            raise ValueError("Zero row in A with negative b")
         
+        c = torch.zeros(dim + 1, device=self.device)
+        c[0] = -1
+
+        row0 = torch.zeros(dim + 1, device=self.device)
+        row0[0] = -1
+
+        A_rest = torch.cat([norms[:, None], A_i], dim=1)
+        A_ub = torch.vstack([row0, A_rest])
+
+        b_ub = torch.cat([
+            torch.zeros(1, device=self.device),
+            b_i
+        ])
+
+        # Transform to numpy to use scipy linprog
+
+        c_np    = c.detach().cpu()
+        A_ub_np = A_ub.detach().cpu()
+        b_ub_np = b_ub.detach().cpu()
+
+        # Solve
+        res = linprog(
+            c=c_np,
+            A_ub=A_ub_np,
+            b_ub=b_ub_np,
+            bounds=[(0, None)] + [(None, None)] * dim,
+            method="highs"
+        )
+
+        if res.status in (2, 3):
+            self._centers[idx] = torch.zeros(dim, device=self.device)
         else:
-            update = []
-            for i in range(self.batch_dim):
-                try:
-                    update.append(self.center(i))
-                except Exception:
-                    update.append(torch.zeros(dim, device=self.device))  # How to resolve this issue?
-            return torch.stack(update, dim=0)
+            self._centers[idx] = torch.tensor(res.x[1:], device=self.device)
+
+        return self._centers[idx]
+
 
     def draw(self, ax=None, batch_idx: int = 0, color="blue", **kwargs):
         """Draw a specific 2D polytope in the batch."""
@@ -222,6 +252,10 @@ class Polytope(ConvexSet):
         else:
             raise NotImplementedError(
                 f"Intersection check not implemented for {type(other)}")
+
+    def contains(self, other):
+        return NotImplementedError(
+                f"Containment check not implemented for {type(other)}")
     
     def setup_constraints(self):
         """

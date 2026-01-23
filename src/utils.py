@@ -56,9 +56,6 @@ def categorise_run(cfg: Experiment) -> tuple[str, list[str]]:
         elif cfg.safeguard.name == "Pinet":
             group += "Pinet"
             tags += ["Pinet"]
-        elif cfg.safeguard.name == "PinetJAX":
-            group += "PinetJAX"
-            tags += ["PinetJAX"]
         if cfg.safeguard.regularisation_coefficient > 0:
             group += "(Reg)"
             tags += ["Regularised"]
