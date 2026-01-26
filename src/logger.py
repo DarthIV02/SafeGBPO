@@ -13,6 +13,8 @@ import time
 import psutil
 import sys
 
+from torch import Tensor
+
 class Logger:
     """
     Logs evaluation and training data to Weights and Biases.
@@ -64,7 +66,7 @@ class Logger:
                             policy_loss: float,
                             value_loss: float,
                             num_learn_episodes: int,
-                            additional_metrics: dict[str, float] = {}):
+                            additional_metrics: dict[str, Tensor] = {}):
         """
         Callback call to log and evaluate.
 

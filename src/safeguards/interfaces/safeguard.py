@@ -107,7 +107,8 @@ class Safeguard(VectorActionWrapper, ABC):
     @jaxtyped(typechecker=beartype)
     def regularisation(self,
                         action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"],
-                        safe_action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"]
+                        safe_action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"],
+                        **kwargs
                         ) -> Float[Tensor, "..."]:
         """
         Compute the safeguard regularisation loss for the given action.
@@ -128,7 +129,6 @@ class Safeguard(VectorActionWrapper, ABC):
             A dictionary of metrics.
         """
         return {
-            "interventions":        self.interventions,
             "dist_safe_action":     self.dist_safe_action,
             "pre_eq_violation":     self.pre_eq_violation,
             "pre_ineq_violation":   self.pre_ineq_violation,

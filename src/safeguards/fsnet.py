@@ -1,7 +1,7 @@
 from torch import Tensor
 from beartype import beartype
 from jaxtyping import Float, jaxtyped
-from typing import Dict, Tuple, Callable, Optional
+from typing import Any, Dict, Tuple, Callable, Optional
 from types import SimpleNamespace
 import torch
 
@@ -47,11 +47,13 @@ class FSNetSafeguard(Safeguard):
     def __init__(self, 
                  env: SafeEnv, 
                  regularisation_coefficient: float,
+                 penalty_addition_threshold: float,
                  **kwargs):
         Safeguard.__init__(self, env, regularisation_coefficient)
 
         # assume the remaining kwargs are solver config parameters
         self.method_config = kwargs
+        self.penalty_addition_threshold = penalty_addition_threshold
 
         self.solver =    lbfgs_torch_solve
         self.nondiff_solver =   nondiff_lbfgs_torch_solve
@@ -115,23 +117,32 @@ class FSNetSafeguard(Safeguard):
         return safe_action
 
     def regularisation(self, action: Float[Tensor, "{batch_dim} {action_dim}"],
-                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"]) -> Tensor:
+                        safe_action: Float[Tensor, "{batch_dim} {action_dim}"],
+                        safeguard_metrics: Optional[Dict[str, Any]] = None
+                        ) -> Tensor:
         """
         Compute the safeguard regularisation loss for FSNet.
         Args:
             action: The original action before safeguarding.
             safe_action: The safeguarded action.
+            safeguard_metrics: Optional dictionary containing safeguard metrics such as pre-violation values.
         Returns:
             The safeguard regularisation loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
 
-        loss = self.regularisation_coefficient/2 * torch.nn.functional.mse_loss(safe_action, action) 
-        
-        if self.pre_eq_violation.mean() > 1e-3:
-            loss = loss + self.regularisation_coefficient * self.pre_eq_violation.mean()
-        if self.pre_ineq_violation.mean() > 1e-3:
-            loss = loss + self.regularisation_coefficient * self.pre_ineq_violation.mean()
-        return loss
+        loss = self.regularisation_coefficient/2 *  (torch.norm(action - safe_action, dim=-1, keepdim=True) ** 2)
+
+        if safeguard_metrics:
+            pre_eq_violation = safeguard_metrics["pre_eq_violation"].tensor
+            pre_ineq_violation = safeguard_metrics["pre_ineq_violation"].tensor
+
+            loss +=  self.regularisation_coefficient * torch.where(pre_eq_violation > self.penalty_addition_threshold,
+                                                                pre_eq_violation, 
+                                                                torch.zeros_like(pre_eq_violation))
+            loss +=  self.regularisation_coefficient * torch.where(pre_ineq_violation > self.penalty_addition_threshold,
+                                                                pre_ineq_violation,
+                                                                torch.zeros_like(pre_ineq_violation))
+        return loss.mean()
     
     def safeguard_metrics(self):
         """

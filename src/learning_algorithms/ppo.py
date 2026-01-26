@@ -115,7 +115,7 @@ class PPO(LearningAlgorithm):
                 value = self.value_function(observation).squeeze(dim=1)
             terminal = terminated | truncated
 
-            safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
+            safe_action = self.env.safe_action if hasattr(self.env, "safe_action") else None
             safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
             self.buffer.add(observation, reward, terminal, value, action, log_prob, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             average_reward += reward.sum().item()
@@ -149,7 +149,9 @@ class PPO(LearningAlgorithm):
         policy_loss = torch.max(loss, loss_clamped).mean() - self.ent_coef * entropy.mean()
 
         if self.buffer.store_safe_actions:
-            policy_loss += self.env.regularisation(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss += self.env.regularisation(self.buffer.actions.tensor, 
+                                                   self.buffer.safe_actions.tensor,
+                                                   safeguard_metrics= self.buffer.safeguard_metrics)
 
         self.policy_optim.zero_grad()
         policy_loss.backward()

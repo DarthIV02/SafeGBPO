@@ -80,7 +80,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=None,
-                   interactions=100_000,
+                   interactions=10_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -88,7 +88,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=BoundaryProjectionConfig(),
-                   interactions=100_000,
+                   interactions=10_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -96,7 +96,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(),
                    safeguard=RayMaskConfig(),
-                   interactions=100_000,
+                   interactions=10_000,
                    eval_freq=5_000,
                    fast_eval=False),
         
@@ -104,7 +104,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(safe_action_polytope=True),
                    safeguard=FSNetConfig(),
-                   interactions=100_000,
+                   interactions=10_000,
                    eval_freq=5_000,
                    fast_eval=False),
 
@@ -112,7 +112,7 @@ if __name__ == "__main__":
                    learning_algorithm=SHACConfig(),
                    env=NavigateSeekerConfig(safe_action_polytope=True),
                    safeguard=PinetConfig(n_iter_admm=100, n_iter_bwd=5, fpi=True),
-                   interactions=100_000,
+                   interactions=10_000,
                    eval_freq=5_000,
                    fast_eval=False),
     ]

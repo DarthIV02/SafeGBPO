@@ -114,7 +114,7 @@ class SHAC(LearningAlgorithm):
             if t == self.len_trajectories - 1:
                 terminal = torch.ones_like(terminal)
 
-            safe_action = self.env.safe_actions if hasattr(self.env, "safe_actions") else None
+            safe_action = self.env.safe_action if hasattr(self.env, "safe_action") else None
             safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
             self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
             t += 1
@@ -145,7 +145,9 @@ class SHAC(LearningAlgorithm):
         policy_loss = -(discount * values).sum() / normalisation
         
         if self.buffer.store_safe_actions:
-            policy_loss += self.env.regularisation(self.buffer.actions.tensor, self.buffer.safe_actions.tensor)
+            policy_loss += self.env.regularisation(self.buffer.actions.tensor, 
+                                                   self.buffer.safe_actions.tensor,
+                                                   safeguard_metrics=self.buffer.safeguard_metrics)
 
         policy_loss.backward()
         

@@ -74,6 +74,7 @@ class CoupledBuffer:
         self.batch_size = batch_size
         self.gamma = gamma
         self.gae_lambda = gae_lambda
+        self.safeguard_metrics = {} if store_safe_actions else None
 
         self.t = torch.zeros(self.num_envs, dtype=torch.int64)
 
@@ -90,7 +91,6 @@ class CoupledBuffer:
         if self.gae_lambda is not None:
             self.advantages = CoupledTensor(self.len_trajectories + 1, self.num_envs)
         self.terminals = CoupledTensor(self.len_trajectories + 1, self.num_envs, dtype=torch.bool)
-        self.safeguard_metrics = []
 
     @jaxtyped(typechecker=beartype)
     def reset(self,
@@ -126,7 +126,9 @@ class CoupledBuffer:
         if self.gae_lambda is not None:
             self.advantages.reset()
         self.terminals.reset()
-        self.safeguard_metrics = []
+        if self.safeguard_metrics is not None:
+            for key in self.safeguard_metrics:
+                self.safeguard_metrics[key].reset()
 
         self.observations[0] = reset_observation
         if self.store_values:
@@ -160,10 +162,6 @@ class CoupledBuffer:
             print("[BUFFER OVERFLOW] Overwriting oldest transitions")
             self.t[self.t >= self.len_trajectories] = 0
 
-        if safeguard_metrics is not None:
-            self.safeguard_metrics.append(safeguard_metrics)
-        else:
-            self.safeguard_metrics.append({})
         self.observations[self.t + 1] = observation
         if value is not None:
             self.values[self.t + 1] = value
@@ -173,6 +171,11 @@ class CoupledBuffer:
                 self.log_probs[self.t] = log_prob
             if safe_action is not None:
                 self.safe_actions[self.t] = safe_action
+                if safeguard_metrics:
+                    for key, metric in safeguard_metrics.items():
+                        if key not in self.safeguard_metrics:
+                            self.safeguard_metrics[key] = CoupledTensor(self.len_trajectories + 1, *metric.shape)    
+                        self.safeguard_metrics[key][self.t] = metric         
         self.rewards[self.t] = reward
         self.terminals[self.t + 1] = terminal
 
@@ -182,17 +185,13 @@ class CoupledBuffer:
         """
         Compute the mean of each safeguard metric over the episode.
         """
-        if not self.safeguard_metrics:
-            return {}
-        all_keys = set()
-        for m in self.safeguard_metrics:
-            all_keys.update(m.keys())
-        result = {}
-        for k in all_keys:
-            vals = [float(m[k]) for m in self.safeguard_metrics if k in m]
-            if vals:
-                result[k] = sum(vals) / len(vals)
-        return result
+        aggregated_metrics = {}
+        if self.safeguard_metrics is not None:
+            aggregated_metrics = {}
+            for key, tensor in self.safeguard_metrics.items():
+                aggregated_metrics[key] = tensor[:self.t.max()].mean()
+            return aggregated_metrics
+        return {}
 
     @jaxtyped(typechecker=beartype)
     def calculate_advantages(self) -> None:
