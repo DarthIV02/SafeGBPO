@@ -112,5 +112,5 @@ class LearningAlgorithm(ABC):
         Returns:
             A dictionary of metrics.
         """
-        return dict(getattr(self, '_last_episode_safeguard_metrics', {}))
+        return dict(getattr(self, '_last_episode_additional_metrics', {}))
     

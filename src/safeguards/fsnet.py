@@ -108,9 +108,9 @@ class FSNetSafeguard(Safeguard):
                     **self.method_config
                 )
     
-        # compute post safeguard violations for logging
-        self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
-        self.post_ineq_violation = self.data.inequality_constraint_violation(None, safe_action).square().sum(dim=1)
+            # compute post safeguard violations for logging
+            self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
+            self.post_ineq_violation = self.data.inequality_constraint_violation(None, safe_action).square().sum(dim=1)
 
         # return the safe action to original space
         safe_action = self.data.post_process_action(safe_action)
@@ -149,12 +149,18 @@ class FSNetSafeguard(Safeguard):
             Metrics to monitor the safeguard performance residual violations 
         """
 
-        return  super().safeguard_metrics() | {
-            "pre_eq_violation":     self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation,
-        }
+        safe_guard_metrics_training = {
+        "pre_eq_violation":     self.pre_eq_violation,
+        "pre_ineq_violation":   self.pre_ineq_violation}
+        
+        safe_guard_metrics_evaluation = safe_guard_metrics_training.copy() 
+        
+        if not torch.is_grad_enabled(): # evaluation mode
+            safe_guard_metrics_evaluation |= {
+                "post_eq_violation":    self.post_eq_violation,
+                "post_ineq_violation":  self.post_ineq_violation}
+        return super().safeguard_metrics(safeguard_metrics_dict=safe_guard_metrics_evaluation,
+                                        safeguard_metrics_dict_training_only=safe_guard_metrics_training)
     
 #################################################
 # LBFGS solver functions 

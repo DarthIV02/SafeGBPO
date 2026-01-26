@@ -90,7 +90,7 @@ class SHAC(LearningAlgorithm):
         policy_loss = self.update_policy()
         value_loss = self.update_value_function()
         self.update_target_value_function()
-        self._last_episode_safeguard_metrics = self.buffer.aggregate_safeguard_metrics()
+        self._last_episode_additional_metrics = self.buffer.aggregate_additional_metrics()
         return average_reward, policy_loss, value_loss
 
     @jaxtyped(typechecker=beartype)
@@ -116,7 +116,7 @@ class SHAC(LearningAlgorithm):
 
             safe_action = self.env.safe_action if hasattr(self.env, "safe_action") else None
             safeguard_metrics  = self.env.safeguard_metrics()  if hasattr(self.env, "safeguard_metrics") else None
-            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, safeguard_metrics=safeguard_metrics)
+            self.buffer.add(observation, reward, terminal, value, action, safe_action=safe_action, additional_metrics=safeguard_metrics)
             t += 1
             average_reward += reward.sum().item()
         return average_reward / self.env.num_envs / self.len_trajectories
@@ -147,7 +147,7 @@ class SHAC(LearningAlgorithm):
         if self.buffer.store_safe_actions:
             policy_loss += self.env.regularisation(self.buffer.actions.tensor, 
                                                    self.buffer.safe_actions.tensor,
-                                                   safeguard_metrics=self.buffer.safeguard_metrics)
+                                                   safeguard_metrics=self.buffer.additional_metrics)
 
         policy_loss.backward()
         
