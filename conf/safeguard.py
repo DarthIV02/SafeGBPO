@@ -49,3 +49,4 @@ class PinetConfig(SafeguardConfig):
     n_iter_admm: int = 10
     n_iter_bwd: int = 10
     fpi: bool = False
+    store_trajectory: bool = False
