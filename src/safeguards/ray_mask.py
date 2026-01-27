@@ -82,7 +82,7 @@ class RayMaskSafeguard(Safeguard):
         action_dist = torch.linalg.vector_norm(action - safe_center, dim=1, ord=2, keepdim=True)
         directions = (action - safe_center) / (action_dist + 1e-8)
 
-        safe= safe_dist < 1e-4
+        safe= safe_dist < 1e-5
         central = action_dist < 1e-8  
         use_center = torch.logical_or(central, safe)
 
