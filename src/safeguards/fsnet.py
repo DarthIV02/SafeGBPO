@@ -48,12 +48,14 @@ class FSNetSafeguard(Safeguard):
                  env: SafeEnv, 
                  regularisation_coefficient: float,
                  penalty_addition_threshold: float,
+                 residual_coefficient: float,
                  **kwargs):
         Safeguard.__init__(self, env, regularisation_coefficient)
 
         # assume the remaining kwargs are solver config parameters
         self.method_config = kwargs
         self.penalty_addition_threshold = penalty_addition_threshold
+        self.residual_coefficient = residual_coefficient
 
         self.solver =    lbfgs_torch_solve
         self.nondiff_solver =   nondiff_lbfgs_torch_solve
@@ -136,10 +138,10 @@ class FSNetSafeguard(Safeguard):
             pre_eq_violation = safeguard_metrics["pre_eq_violation"].tensor
             pre_ineq_violation = safeguard_metrics["pre_ineq_violation"].tensor
 
-            loss +=  self.regularisation_coefficient * torch.where(pre_eq_violation > self.penalty_addition_threshold,
+            loss +=  self.residual_coefficient * torch.where(pre_eq_violation > self.penalty_addition_threshold,
                                                                 pre_eq_violation, 
                                                                 torch.zeros_like(pre_eq_violation))
-            loss +=  self.regularisation_coefficient * torch.where(pre_ineq_violation > self.penalty_addition_threshold,
+            loss +=  self.residual_coefficient * torch.where(pre_ineq_violation > self.penalty_addition_threshold,
                                                                 pre_ineq_violation,
                                                                 torch.zeros_like(pre_ineq_violation))
         return loss.mean()
