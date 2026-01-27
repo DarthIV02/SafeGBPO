@@ -117,8 +117,8 @@ class Safeguard(VectorActionWrapper, ABC):
     
     @jaxtyped(typechecker=beartype)
     def safeguard_metrics(self, 
-                          safeguard_metrics_dict: dict[str, Any] = {},
-                          safeguard_metrics_dict_training_only: dict[str, Any] = {},
+                          safeguard_metrics_dict: Optional[dict[str, Any]] = None,
+                          safeguard_metrics_dict_training_only:  Optional[dict[str, Any]] = None,
                           **kwargs
                           ) -> dict[str, Any]:
         """
@@ -132,9 +132,16 @@ class Safeguard(VectorActionWrapper, ABC):
         Returns:
             A dictionary of metrics.
         """
+
+        if safeguard_metrics_dict is None:
+            safeguard_metrics_dict = {}
+
+        if safeguard_metrics_dict_training_only is None:
+            safeguard_metrics_dict_training_only = {}
+
         if torch.is_grad_enabled(): # in training mode we do not store metrics
             return safeguard_metrics_dict_training_only
-        
+
         def compute_generic_constraint_violation(phase, action,metrics_dict: dict[str, Any] = {}):
             data = self.safe_action_set()
             data.setup_constraints()
@@ -143,6 +150,7 @@ class Safeguard(VectorActionWrapper, ABC):
             metrics_dict[f"{phase}_ineq_violation"] = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
             metrics_dict[f"{phase}_contraint_violation"] = metrics_dict[f"{phase}_eq_violation"] + metrics_dict[f"{phase}_ineq_violation"]
             return metrics_dict
+        
         
         if not "pre_eq_violation" in safeguard_metrics_dict and not "pre_ineq_violation" in safeguard_metrics_dict:
             safeguard_metrics_dict = compute_generic_constraint_violation("pre", self.initial_action, safeguard_metrics_dict)
