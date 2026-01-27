@@ -128,7 +128,7 @@ class Logger:
         # Track additional metrics during evaluation
         eval_additional_metrics = {}
              
-        if not hasattr(self.eval_env, "safe_guard_metrics") or not callable(self.eval_env.safeguard_metrics):
+        if not hasattr(self.eval_env, "safeguard_metrics"):
 
             def compute_generic_constraint_violation(action):
                 data = self.eval_env.safe_action_set()
@@ -149,7 +149,7 @@ class Logger:
             
             observation, reward, terminated, truncated, info = self.eval_env.step(action) # Action becomes safe due to Gymnasium actions
             
-            metrics = self.eval_env.safeguard_metrics(action)
+            metrics = self.eval_env.safeguard_metrics(action =action)
             for key, value in metrics.items():
                 if key not in eval_additional_metrics:
                     eval_additional_metrics[key] = []

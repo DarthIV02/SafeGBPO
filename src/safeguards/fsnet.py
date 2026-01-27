@@ -144,9 +144,14 @@ class FSNetSafeguard(Safeguard):
                                                                 torch.zeros_like(pre_ineq_violation))
         return loss.mean()
     
-    def safeguard_metrics(self):
+    def safeguard_metrics(self, **kwargs) -> dict[str, Any]:
         """
             Metrics to monitor the safeguard performance residual violations 
+
+            Args:
+                keyword arguments for compatibility
+            Returns:
+                dict[str, Any]: dictionary of safeguard metrics
         """
 
         safe_guard_metrics_training = {

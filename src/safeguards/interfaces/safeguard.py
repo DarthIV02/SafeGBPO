@@ -119,6 +119,7 @@ class Safeguard(VectorActionWrapper, ABC):
     def safeguard_metrics(self, 
                           safeguard_metrics_dict: dict[str, Any] = {},
                           safeguard_metrics_dict_training_only: dict[str, Any] = {},
+                          **kwargs
                           ) -> dict[str, Any]:
         """
         Get metrics related to the safeguard.
@@ -127,7 +128,7 @@ class Safeguard(VectorActionWrapper, ABC):
             safeguard_metrics_dict: A dictionary to store metrics.
             safeguard_metrics_dict_training_only: A dictionary to store metrics only in training mode. 
                                                     Useful for incorporating metrics into the loss function.
-
+            keyword arguments for compatibility
         Returns:
             A dictionary of metrics.
         """
@@ -140,14 +141,14 @@ class Safeguard(VectorActionWrapper, ABC):
             processed_action = data.pre_process_action(action)
             metrics_dict[f"{phase}_eq_violation"] = data.equality_constraint_violation(None, processed_action).square().sum(dim=1)
             metrics_dict[f"{phase}_ineq_violation"] = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
+            metrics_dict[f"{phase}_contraint_violation"] = metrics_dict[f"{phase}_eq_violation"] + metrics_dict[f"{phase}_ineq_violation"]
             return metrics_dict
         
         if not "pre_eq_violation" in safeguard_metrics_dict and not "pre_ineq_violation" in safeguard_metrics_dict:
             safeguard_metrics_dict = compute_generic_constraint_violation("pre", self.initial_action, safeguard_metrics_dict)
         if not "post_eq_violation" in safeguard_metrics_dict and not "post_ineq_violation" in safeguard_metrics_dict:
             safeguard_metrics_dict = compute_generic_constraint_violation("post", self.safe_action, safeguard_metrics_dict)
-        
-        safeguard_metrics_dict["projection_distance"] = torch.nn.functional.mse_loss(self.safe_action, self.initial_action, reduction='none').mean(dim=1)
+        safeguard_metrics_dict["projection_distance"] = torch.nn.functional.mse_loss(self.safe_action, self.initial_action)
 
         return safeguard_metrics_dict
     
