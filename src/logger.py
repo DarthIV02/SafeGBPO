@@ -138,7 +138,7 @@ class Logger:
                 pre_ineq_violation = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
                 
                 return {
-                    "pre_contraint_violation": pre_eq_violation + pre_ineq_violation,
+                    "pre_constraint_violation": pre_eq_violation + pre_ineq_violation,
                     "pre_eq_violation": pre_eq_violation,
                     "pre_ineq_violation": pre_ineq_violation
                 }

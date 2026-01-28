@@ -165,7 +165,9 @@ class FSNetSafeguard(Safeguard):
         if not torch.is_grad_enabled(): # evaluation mode
             safe_guard_metrics_evaluation |= {
                 "post_eq_violation":    self.post_eq_violation,
-                "post_ineq_violation":  self.post_ineq_violation}
+                "post_ineq_violation":  self.post_ineq_violation,
+                "pre_constraint_violation": self.pre_eq_violation + self.pre_ineq_violation,
+                "post_constraint_violation": self.post_eq_violation + self.post_ineq_violation}
         return super().safeguard_metrics(safeguard_metrics_dict=safe_guard_metrics_evaluation,
                                         safeguard_metrics_dict_training_only=safe_guard_metrics_training)
     

@@ -82,20 +82,12 @@ class RayMaskSafeguard(Safeguard):
         action_dist = torch.linalg.vector_norm(action - safe_center, dim=1, ord=2, keepdim=True)
         directions = (action - safe_center) / (action_dist + 1e-8)
 
-        safe= safe_dist < 1e-5
         central = action_dist < 1e-8  
-        use_center = torch.logical_or(central, safe)
-
-
-        safe_dist_clamped = torch.where(use_center, torch.ones_like(safe_dist), safe_dist)
-        feasible_dist_clamped = torch.where(use_center, torch.ones_like(feasible_dist), feasible_dist)
-
-        radial_dist = self.radial_mapping(action_dist, safe_dist_clamped, feasible_dist_clamped)
 
         safe_action = torch.where(
-            use_center,
+            central,
             safe_center,
-            safe_center + directions * radial_dist
+            safe_center + directions * self.radial_mapping(action_dist, safe_dist, feasible_dist)
         )
 
         return safe_action
@@ -118,7 +110,7 @@ class RayMaskSafeguard(Safeguard):
             The radial mapping
         """
         if self.linear_projection:
-            mapping = action_dist / safe_dist
+            mapping = action_dist / feasible_dist
         else:
             mapping = torch.tanh(action_dist / safe_dist) / torch.tanh(feasible_dist / safe_dist)
 

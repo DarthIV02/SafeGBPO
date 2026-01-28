@@ -148,7 +148,7 @@ class Safeguard(VectorActionWrapper, ABC):
             processed_action = data.pre_process_action(action)
             metrics_dict[f"{phase}_eq_violation"] = data.equality_constraint_violation(None, processed_action).square().sum(dim=1)
             metrics_dict[f"{phase}_ineq_violation"] = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
-            metrics_dict[f"{phase}_contraint_violation"] = metrics_dict[f"{phase}_eq_violation"] + metrics_dict[f"{phase}_ineq_violation"]
+            metrics_dict[f"{phase}_constraint_violation"] = metrics_dict[f"{phase}_eq_violation"] + metrics_dict[f"{phase}_ineq_violation"]
             return metrics_dict
         
         
