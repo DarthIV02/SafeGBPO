@@ -38,8 +38,9 @@ class PinetSafeguard(Safeguard):
         n_iter_admm: int,
         n_iter_bwd: int,
         sigma: float = 1.0,
-        omega: float = 1.7,
+        omega: float = 1.3,
         fpi: bool = False,
+        store_trajectory = False,
         **kwargs
     ):
         super().__init__(env, regularisation_coefficient)
@@ -51,6 +52,10 @@ class PinetSafeguard(Safeguard):
         self.omega = omega
         self.fpi = fpi        
         self.save_dim = False
+        
+        # Visualization #
+        self.store_trajectory = store_trajectory
+        self.trajectory = []
 
         if not self.env.safe_action_polytope:
             raise Exception("Polytope attribute has to be True")
@@ -107,6 +112,8 @@ class PinetSafeguard(Safeguard):
         y_raw_D = y_raw[:, :D, :]
         denom = 1 / (1 + 2 * self.sigma)
         addition = 2 * self.sigma * y_raw_D
+        if self.store_trajectory:
+            self.trajectory.append(self.eq.project(sk_iter))
         
         for _ in range(steps):
             zk = self.eq.project(sk_iter)
@@ -115,6 +122,8 @@ class PinetSafeguard(Safeguard):
             reflect[:, :D, :] = numerator * denom
             tk = self.box_project(reflect)
             sk_iter = sk_iter + self.omega * (tk - zk)
+            if self.store_trajectory:
+                 self.trajectory.append(self.eq.project(sk_iter))
 
         return sk_iter
 

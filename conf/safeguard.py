@@ -44,6 +44,7 @@ class FSNetConfig(SafeguardConfig):
     line_search_rho: float = 0.5
     line_search_max_iter: int = 10
     verbose: bool = False
+    store_trajectory: bool = False
 
 @dataclass
 class PinetConfig(SafeguardConfig):
@@ -51,3 +52,4 @@ class PinetConfig(SafeguardConfig):
     n_iter_admm: int = 10
     n_iter_bwd: int = 10
     fpi: bool = False
+    store_trajectory: bool = False

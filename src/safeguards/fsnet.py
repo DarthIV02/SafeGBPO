@@ -49,6 +49,7 @@ class FSNetSafeguard(Safeguard):
                  regularisation_coefficient: float,
                  penalty_addition_threshold: float,
                  residual_coefficient: float,
+                 store_trajectory = False,
                  **kwargs):
         Safeguard.__init__(self, env, regularisation_coefficient)
 
@@ -59,6 +60,7 @@ class FSNetSafeguard(Safeguard):
 
         self.solver =    lbfgs_torch_solve
         self.nondiff_solver =   nondiff_lbfgs_torch_solve
+        self.store_trajectory = store_trajectory
 
         if not self.env.safe_action_polytope:
             raise Exception("Polytope attribute has to be True")
@@ -95,20 +97,26 @@ class FSNetSafeguard(Safeguard):
         # hybrid solver during training (with grad) for better backpropagation
 
         if torch.is_grad_enabled(): # training mode
+            print("training mode")
             safe_action = self.solver(
                 None,
                 processed_action,
                 self.data,
                 **self.method_config
             )
+
         else: # evaluation mode
             with torch.enable_grad(): # ensure grad is enabled for solvers just like in FSNet codebase
                 safe_action = self.nondiff_solver(
                     None,
                     processed_action,
                     self.data,
+                    store_trajectory = self.store_trajectory,
                     **self.method_config
                 )
+                if self.store_trajectory:
+                    safe_action, trajectory = safe_action
+                    self.trajectory = [self.data.post_process_action(t) for t in trajectory]
     
             # compute post safeguard violations for logging
             self.post_eq_violation = self.data.equality_constraint_violation(None, safe_action).square().sum(dim=1)
@@ -258,6 +266,11 @@ def nondiff_lbfgs_torch_solve(
         data: Data object with equality_constraint_violation and inequality_constraint_violation methods
         config: Solver configuration
     """
+
+    # Avoid config errors if debug_trajectory is passed in kwargs
+    if "store_trajectory" in kwargs:
+       store_trajectory = kwargs.pop("store_trajectory")
+
     if config is None:
         config = SimpleNamespace(**kwargs)
 
@@ -269,10 +282,15 @@ def nondiff_lbfgs_torch_solve(
         config.gradient_clipping_max_norm,
         config.max_iter,
         config.lbfgs_torch_learning_rate,
-        config.lbfgs_history_size
+        config.lbfgs_history_size,
+        store_trajectory = store_trajectory,
     )
-    
-    return a.detach()
+
+    if store_trajectory:
+        y_opt, trajectory = a
+        return y_opt.detach(), trajectory
+    else:
+        return a.detach()
 
 def _lbfgs_step(
     y_init: torch.Tensor,
@@ -280,8 +298,9 @@ def _lbfgs_step(
     gradient_clipping_max_norm: float,
     max_iter: int,
     lbfgs_torch_learning_rate: float,
-    lbfgs_history_size: int
-    ) -> torch.Tensor:
+    lbfgs_history_size: int,
+    store_trajectory: bool = False,
+):
     """
     LBFGS step that preserves gradient connection to y_init.
     
@@ -300,31 +319,46 @@ def _lbfgs_step(
     # Optimizing delta for y_init + delta
     # y_init stays in the graph, delta is the leaf tensor for optimizer
     delta = torch.zeros_like(y_init, requires_grad=True)
-    
-    optimizer = torch.optim.LBFGS([delta], lr=lbfgs_torch_learning_rate, max_iter=max_iter, 
-                      history_size=lbfgs_history_size, line_search_fn='strong_wolfe')
-    
+
+    optimizer = torch.optim.LBFGS(
+        [delta],
+        lr=lbfgs_torch_learning_rate,
+        max_iter=max_iter,
+        history_size=lbfgs_history_size,
+        line_search_fn='strong_wolfe'
+    )
+
+    trajectory = [] if store_trajectory else None
+
     def closure():
         optimizer.zero_grad()
+
         y_current = y_init + delta
         phi = obj_fn(y_current)
-        
+
+        if trajectory is not None:
+            trajectory.append(y_current.detach().cpu().clone())
+
         # Compute gradient w.r.t. delta
         grad = torch.autograd.grad(phi.mean(), delta, create_graph=False)[0]
-        
+
         # Clip gradient and assign to delta.grad
         grad_norm = grad.norm()
         if grad_norm > gradient_clipping_max_norm:
             grad = grad * (gradient_clipping_max_norm / grad_norm)
-        
+
         delta.grad = grad
-        
         return phi
-    
+
     optimizer.step(closure)
-    
+
     # Return y_init + delta as the optimized point
-    return y_init + delta
+    y_opt = y_init + delta
+
+    if trajectory is not None:
+        return y_opt, trajectory
+    else:
+        return y_opt
 
 #################################################
 # functions and classes from original LBFGS solver
