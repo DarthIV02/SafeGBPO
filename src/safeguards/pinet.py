@@ -106,10 +106,6 @@ class PinetSafeguard(Safeguard):
         the intersection of the hyperplane and box constraints.
         """
 
-        def store_step_in_trajectory(sk):
-            zk_init = self.eq.project(sk)
-            self.trajectory.append(zk_init[:, :D, :].squeeze(2).detach().cpu())
-
         D = self.action_dim
         sk_iter = sk.clone()
 
@@ -117,7 +113,7 @@ class PinetSafeguard(Safeguard):
         denom = 1 / (1 + 2 * self.sigma)
         addition = 2 * self.sigma * y_raw_D
         if self.store_trajectory:
-            store_step_in_trajectory(sk_iter)
+            self.trajectory.append(self.eq.project(sk_iter))
         
         for _ in range(steps):
             zk = self.eq.project(sk_iter)
@@ -127,7 +123,7 @@ class PinetSafeguard(Safeguard):
             tk = self.box_project(reflect)
             sk_iter = sk_iter + self.omega * (tk - zk)
             if self.store_trajectory:
-                store_step_in_trajectory(sk_iter)
+                 self.trajectory.append(self.eq.project(sk_iter))
 
         return sk_iter
 
