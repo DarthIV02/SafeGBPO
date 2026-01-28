@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import cvxpy as cp
@@ -57,13 +57,7 @@ class Safeguard(VectorActionWrapper, ABC):
         self.safe_action = None
         self.interventions = 0
 
-        self.pre_eq_violation = torch.Tensor([0])
-        self.pre_ineq_violation = torch.Tensor([0])
-        self.post_eq_violation = torch.Tensor([0])
-        self.post_ineq_violation = torch.Tensor([0])
-        self.pre_constraint_violation = torch.Tensor([0])
-        self.post_constraint_violation = torch.Tensor([0])
-        self.dist_safe_action = torch.Tensor([0])
+
 
     @jaxtyped(typechecker=beartype)
     def actions(self, action: Float[Tensor, "{self.batch_dim} {self.action_dim}"]) \
@@ -85,6 +79,7 @@ class Safeguard(VectorActionWrapper, ABC):
             """)
 
         self.safe_action = safe_action
+        self.initial_action = action
         
         self.interventions += ((~torch.isclose(safe_action, action)).count_nonzero(dim=1) == self.action_dim).sum().item()
         return safe_action
@@ -107,7 +102,8 @@ class Safeguard(VectorActionWrapper, ABC):
     @jaxtyped(typechecker=beartype)
     def regularisation(self,
                         action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"],
-                        safe_action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"]
+                        safe_action: Float[Tensor, "buffer_size {self.batch_dim} {self.action_dim}"],
+                        **kwargs
                         ) -> Float[Tensor, "..."]:
         """
         Compute the safeguard regularisation loss for the given action.
@@ -120,23 +116,50 @@ class Safeguard(VectorActionWrapper, ABC):
         return self.regularisation_coefficient * torch.nn.functional.mse_loss(safe_action, action)
     
     @jaxtyped(typechecker=beartype)
-    def safeguard_metrics(self) -> dict[str, Any]:
+    def safeguard_metrics(self, 
+                          safeguard_metrics_dict: Optional[dict[str, Any]] = None,
+                          safeguard_metrics_dict_training_only:  Optional[dict[str, Any]] = None,
+                          **kwargs
+                          ) -> dict[str, Any]:
         """
         Get metrics related to the safeguard.
 
+        Args:
+            safeguard_metrics_dict: A dictionary to store metrics.
+            safeguard_metrics_dict_training_only: A dictionary to store metrics only in training mode. 
+                                                    Useful for incorporating metrics into the loss function.
+            keyword arguments for compatibility
         Returns:
             A dictionary of metrics.
         """
-        return {
-            "interventions":        self.interventions,
-            "dist_safe_action":     self.dist_safe_action,
-            "pre_eq_violation":     self.pre_eq_violation,
-            "pre_ineq_violation":   self.pre_ineq_violation,
-            "post_eq_violation":    self.post_eq_violation,
-            "post_ineq_violation":  self.post_ineq_violation,
-            "pre_contraint_violation": self.pre_constraint_violation,
-            "post_contraint_violation": self.post_constraint_violation
-        }
+
+        if safeguard_metrics_dict is None:
+            safeguard_metrics_dict = {}
+
+        if safeguard_metrics_dict_training_only is None:
+            safeguard_metrics_dict_training_only = {}
+
+        if torch.is_grad_enabled(): # in training mode we do not store metrics
+            return safeguard_metrics_dict_training_only
+
+        def compute_generic_constraint_violation(phase, action,metrics_dict: dict[str, Any] = {}):
+            data = self.safe_action_set()
+            data.setup_constraints()
+            processed_action = data.pre_process_action(action)
+            metrics_dict[f"{phase}_eq_violation"] = data.equality_constraint_violation(None, processed_action).square().sum(dim=1)
+            metrics_dict[f"{phase}_ineq_violation"] = data.inequality_constraint_violation(None, processed_action).square().sum(dim=1)
+            metrics_dict[f"{phase}_constraint_violation"] = metrics_dict[f"{phase}_eq_violation"] + metrics_dict[f"{phase}_ineq_violation"]
+            return metrics_dict
+        
+        
+        if not "pre_eq_violation" in safeguard_metrics_dict and not "pre_ineq_violation" in safeguard_metrics_dict:
+            safeguard_metrics_dict = compute_generic_constraint_violation("pre", self.initial_action, safeguard_metrics_dict)
+        if not "post_eq_violation" in safeguard_metrics_dict and not "post_ineq_violation" in safeguard_metrics_dict:
+            safeguard_metrics_dict = compute_generic_constraint_violation("post", self.safe_action, safeguard_metrics_dict)
+        safeguard_metrics_dict["projection_distance"] = torch.nn.functional.mse_loss(self.safe_action, self.initial_action)
+
+        return safeguard_metrics_dict
+    
 
     @jaxtyped(typechecker=beartype)
     def linear_step(self,action: cp.Expression | np.ndarray) \
