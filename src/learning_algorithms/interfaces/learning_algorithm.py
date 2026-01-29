@@ -5,6 +5,7 @@ import torch
 from beartype import beartype
 from jaxtyping import jaxtyped
 from tqdm import tqdm
+from torch import Tensor
 
 from learning_algorithms.components.value_function import ValueFunction
 from src.learning_algorithms.components.policy import Policy
@@ -103,7 +104,7 @@ class LearningAlgorithm(ABC):
         pass
 
     @jaxtyped(typechecker=beartype)
-    def _learn_episode_additional_metrics(self) -> dict[str, float]:
+    def _learn_episode_additional_metrics(self) -> dict[str, Tensor]:
         """
         Get metrics for the learning algorithm. 
         If the learning algorithm has no additional metrics, return an empty dictionary.
@@ -111,5 +112,5 @@ class LearningAlgorithm(ABC):
         Returns:
             A dictionary of metrics.
         """
-        return dict(getattr(self, '_last_episode_safeguard_metrics', {}))
+        return dict(getattr(self, '_last_episode_additional_metrics', {}))
     
