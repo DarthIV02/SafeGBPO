@@ -97,7 +97,6 @@ class FSNetSafeguard(Safeguard):
         # hybrid solver during training (with grad) for better backpropagation
 
         if torch.is_grad_enabled(): # training mode
-            print("training mode")
             safe_action = self.solver(
                 None,
                 processed_action,
