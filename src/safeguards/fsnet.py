@@ -1,7 +1,7 @@
 from torch import Tensor
 from beartype import beartype
 from jaxtyping import Float, jaxtyped
-from typing import Any, Dict, Tuple, Callable, Optional
+from typing import Any, Dict, Tuple, Callable, Optional, List, Union
 from types import SimpleNamespace
 import torch
 
@@ -113,8 +113,11 @@ class FSNetSafeguard(Safeguard):
                     store_trajectory = self.store_trajectory,
                     **self.method_config
                 )
+                
+                # If trajectory storage was requested, safe_action will be a tuple (action, trajectory_list)
                 if self.store_trajectory:
                     safe_action, trajectory = safe_action
+                    # Post-process the trajectory points
                     self.trajectory = [self.data.post_process_action(t) for t in trajectory]
     
             # compute post safeguard violations for logging
@@ -139,7 +142,7 @@ class FSNetSafeguard(Safeguard):
             The safeguard regularisation loss consisting loss f(ˆyθ(x); x) + ρ/2∥yθ(x) − yˆθ(x)∥^2_2 (+ρ/2 * residual penalties for practical efficiency)
         """
 
-        loss = self.regularisation_coefficient/2 *  (torch.norm(action - safe_action, dim=-1, keepdim=True) ** 2)
+        loss = self.regularisation_coefficient/2 * (torch.norm(action - safe_action, dim=-1, keepdim=True) ** 2)
 
         if safeguard_metrics:
             pre_eq_violation = safeguard_metrics["pre_eq_violation"].tensor
@@ -196,12 +199,6 @@ def lbfgs_torch_solve(
     Runs differentiable L-BFGS for max_diff_iter iterations, then
     non-differentiable L-BFGS for remaining iterations. This saves
     memory while maintaining gradient flow through y_init.
-    
-    Args:
-        x: Input tensor (batch_size, input_dim)
-        y_init: Initial action (batch_size, action_dim)
-        data: Data object with equality_constraint_violation and inequality_constraint_violation methods
-        config: Solver configuration
     """
     if config is None:
         config = SimpleNamespace(**kwargs)
@@ -222,8 +219,6 @@ def lbfgs_torch_solve(
         return a_diff
     
     # Differentiable phase via LBFGS Solver from FSNet codebases 
-    # there is no way to get the differentiable steps only from the torch LBFGS implementation
-    # so we use the original FSNet lbfgs_solve for the differentiable part
     lbfgs_kwargs = kwargs.copy()
     lbfgs_kwargs['max_iter'] = config.max_diff_iter
     a_diff = lbfgs_solve(
@@ -255,26 +250,33 @@ def nondiff_lbfgs_torch_solve(
     data,
     config = None,
     **kwargs
-) -> torch.Tensor:
+) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
     """
     Non-differentiable version (no backward graph).
-    
-    Args:
-        x: Input tensor (batch_size, input_dim)
-        y_init: Initial action (batch_size, action_dim)
-        data: Data object with equality_constraint_violation and inequality_constraint_violation methods
-        config: Solver configuration
     """
 
-    # Avoid config errors if debug_trajectory is passed in kwargs
+    store_trajectory = False
     if "store_trajectory" in kwargs:
        store_trajectory = kwargs.pop("store_trajectory")
 
     if config is None:
         config = SimpleNamespace(**kwargs)
-
-    obj_fn = _create_objective_function(x, data, config.objective_scale)
     
+    obj_fn = _create_objective_function(x, data, config.objective_scale)
+
+    # --- INTEGRATION: Vizualisation Mode Trigger ---
+    if store_trajectory:
+        return _manual_lbfgs_step_viz(
+            y_init,
+            x,
+            data, 
+            config,
+            store_trajectory=True
+        )
+    # ------------------------------------------------
+    # end. 
+    
+    # Standard Mode (using torch.optim.LBFGS)
     a = _lbfgs_step(
         y_init,
         obj_fn,
@@ -282,14 +284,91 @@ def nondiff_lbfgs_torch_solve(
         config.max_iter,
         config.lbfgs_torch_learning_rate,
         config.lbfgs_history_size,
-        store_trajectory = store_trajectory,
+        store_trajectory = False, # Force False here as torch.optim capture is noisy
     )
 
+    return a.detach()
+
+## for visualization, can record iterative mapping. ^ ^ 
+def _manual_lbfgs_step_viz(
+    y_init: torch.Tensor,
+    x: torch.Tensor,
+    data,
+    config,
+    store_trajectory: bool = True
+):
+    """
+    Manual L-BFGS loop specifically for Visualization.
+    This bypasses torch.optim.LBFGS to ensure we only capture ACCEPTED steps,
+    resulting in a clean trajectory without line-search noise.
+    """
+    y = y_init.detach().clone().requires_grad_(True)
+    B, n = y_init.shape
+    device, dtype = y_init.device, y_init.dtype
+    
+    trajectory = []
     if store_trajectory:
-        y_opt, trajectory = a
-        return y_opt.detach(), trajectory
-    else:
-        return a.detach()
+        trajectory.append(y.detach().cpu().clone())
+
+    # History buffers
+    S_hist = torch.zeros(config.lbfgs_history_size, B, n, device=device, dtype=dtype)
+    Y_hist = torch.zeros_like(S_hist)
+    hist_len = 0
+    hist_ptr = 0
+
+    # Create objective function 
+    obj_func = _create_objective_function(x, data, config.objective_scale)
+    
+    f_val = obj_func(y)
+    g = torch.autograd.grad(f_val, y, create_graph=False)[0]
+
+    for k in range(config.max_iter):
+        y.requires_grad_(False)
+        g = g.detach()
+        
+        # Check convergence
+        if _check_convergence(f_val, g, config).all():
+            break
+
+        # Compute search direction
+        if hist_len > 0:
+            idx = (hist_ptr - hist_len + torch.arange(hist_len, device=device)) % config.lbfgs_history_size
+            S = S_hist[idx]
+            Y = Y_hist[idx]
+            gamma = compute_gamma(S, Y)
+            d = _search_direction(g, S, Y, gamma)
+        else:
+            d = -0.1 * g
+
+        # Line Search
+        step = _backtracking_line_search(y, d, g, f_val, obj_func, config)
+
+        # Update
+        y_next = y + step * d
+        
+        if store_trajectory:
+            trajectory.append(y_next.detach().cpu().clone())
+
+        y_next.requires_grad_(True)
+        f_next = obj_func(y_next)
+        g_next = torch.autograd.grad(f_next, y_next, create_graph=False)[0]
+
+        # Update History
+        S_hist[hist_ptr] = (y_next - y).detach()
+        Y_hist[hist_ptr] = (g_next - g).detach()
+        hist_ptr = (hist_ptr + 1) % config.lbfgs_history_size
+        hist_len = min(hist_len + 1, config.lbfgs_history_size)
+
+        y = y_next.detach()
+        f_val = f_next.clone()
+        g = g_next.clone()
+
+    y_final = y.detach()
+    
+    if store_trajectory:
+        return y_final, trajectory
+    return y_final
+
 
 def _lbfgs_step(
     y_init: torch.Tensor,
@@ -301,22 +380,9 @@ def _lbfgs_step(
     store_trajectory: bool = False,
 ):
     """
-    LBFGS step that preserves gradient connection to y_init.
-    
-    It optimizes a delta (correction) tensor, then adds it to y_init.
-    This keeps y_init in the computation graph while allowing LBFGS to optimize.
-    
-    Args:
-        y_init: Initial point (can be non-leaf, gradient connection preserved!)
-        obj_fn: Objective function
-        gradient_clipping_max_norm: Gradient clipping norm
-        max_iter: Max iterations
-        lbfgs_torch_learning_rate: Learning rate
-        lbfgs_history_size: LBFGS history size
-        create_graph: Whether to create backward graph
+    Standard LBFGS step using torch.optim (Preserves gradient connection).
+    Not suitable for clean trajectory visualization due to line-search noise.
     """
-    # Optimizing delta for y_init + delta
-    # y_init stays in the graph, delta is the leaf tensor for optimizer
     delta = torch.zeros_like(y_init, requires_grad=True)
 
     optimizer = torch.optim.LBFGS(
@@ -327,6 +393,8 @@ def _lbfgs_step(
         line_search_fn='strong_wolfe'
     )
 
+    # Note: store_trajectory here would capture noise, so we typically assume False 
+    # when called from nondiff_lbfgs_torch_solve
     trajectory = [] if store_trajectory else None
 
     def closure():
@@ -338,10 +406,7 @@ def _lbfgs_step(
         if trajectory is not None:
             trajectory.append(y_current.detach().cpu().clone())
 
-        # Compute gradient w.r.t. delta
         grad = torch.autograd.grad(phi.mean(), delta, create_graph=False)[0]
-
-        # Clip gradient and assign to delta.grad
         grad_norm = grad.norm()
         if grad_norm > gradient_clipping_max_norm:
             grad = grad * (gradient_clipping_max_norm / grad_norm)
@@ -351,7 +416,6 @@ def _lbfgs_step(
 
     optimizer.step(closure)
 
-    # Return y_init + delta as the optimized point
     y_opt = y_init + delta
 
     if trajectory is not None:
@@ -363,8 +427,6 @@ def _lbfgs_step(
 # functions and classes from original LBFGS solver
 #################################################
 
-# Differentiable and nondifferentiable L-BFGS solver
-
 @torch.jit.script
 def _search_direction(
     g: torch.Tensor,               # (B, n)
@@ -374,22 +436,6 @@ def _search_direction(
 ) -> torch.Tensor:                 # returns d (B, n)
     """
     Compute d = −H_k^{-1} g_k for L‑BFGS in batch mode using two-loop recursion.
-
-    Parameters
-    ----------
-    g : torch.Tensor
-        Current gradient, shape (B, n)
-    S : torch.Tensor
-        History of s_i vectors, shape (m, B, n)
-    Y : torch.Tensor
-        History of y_i vectors, shape (m, B, n)
-    gamma : torch.Tensor
-        Scalar or (B,1) scaling for the initial Hessian approximation
-
-    Returns
-    -------
-    torch.Tensor
-        Search direction, shape (B, n)
     """
     m = S.shape[0]  # history length
     eps = 1e-10
@@ -419,25 +465,11 @@ def _search_direction(
 def compute_gamma(S: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     """
     Compute the initial Hessian scaling factor γ = s^T y / y^T y.
-    
-    Parameters
-    ----------
-    S : torch.Tensor
-        History of s vectors, shape (m, B, n)
-    Y : torch.Tensor
-        History of y vectors, shape (m, B, n)
-        
-    Returns
-    -------
-    torch.Tensor
-        Scaling factor, shape (B, 1)
     """
     eps = 1e-10
     s_dot_y = (S[-1] * Y[-1]).sum(dim=1, keepdim=True)
     y_dot_y = (Y[-1] * Y[-1]).sum(dim=1, keepdim=True) + eps
     return s_dot_y / y_dot_y
-
-
 
 
 def _create_objective_function(x: torch.Tensor, data, objective_scale: float) -> Callable[[torch.Tensor], torch.Tensor]:
@@ -488,24 +520,6 @@ def lbfgs_solve(
 ) -> torch.Tensor:
     """
     Differentiable L‑BFGS solver with vectorized two‑loop recursion.
-    
-    Parameters
-    ----------
-    y_init : torch.Tensor
-        Initial guess, shape (B, n)
-    x : torch.Tensor
-        Input data
-    data : object
-        Data object with equality_constraint_violation and inequality_constraint_violation methods
-    config : LBFGSConfig, optional
-        Configuration object. If None, uses default parameters from kwargs.
-    **kwargs
-        Additional parameters if config is not provided
-        
-    Returns
-    -------
-    torch.Tensor
-        Solution, shape (B, n)
     """
     if config is None:
         config = SimpleNamespace(**kwargs)
@@ -569,6 +583,3 @@ def lbfgs_solve(
                   f"|g| = {g_next.norm():.3e}, step = {step:.3e}")
     
     return y
-
-
- 
